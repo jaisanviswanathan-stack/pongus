@@ -4,8 +4,8 @@
   "description": "Online Pong Game with Custom Keybinds",
   "main": "web/server.js",
   "scripts": {
-    "start": "cd web && npm install && npm start",
-    "dev": "cd web && npm install && npm start"
+    "install": "cd web && npm install",
+    "start": "cd web && node server.js"
   },
   "engines": {
     "node": "18.x"
