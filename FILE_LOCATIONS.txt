@@ -1,0 +1,165 @@
+================================================================================
+                          FILE LOCATION QUICK REFERENCE
+================================================================================
+
+GAME ENGINE & LOGIC
+  • PingPongGame.java                   src/game/
+    └─ Main game loop, AI, all logic (331 KB)
+
+GAME OBJECTS
+  • Ball.java                           src/entities/
+  • Paddle.java                         src/entities/
+  • Player.java                         src/entities/
+  • Projectile.java                     src/entities/
+  • BulletProjectile.java               src/entities/
+  • LaserProjectile.java                src/entities/
+  • PowerUpEntity.java                  src/entities/
+
+PHYSICS & COLLISIONS
+  • PhysicsEngine.java                  src/physics/
+  • CollisionDetector.java              src/physics/
+
+ONLINE MULTIPLAYER (No Port Forwarding!)
+  • OnlineMultiplayerManager.java       src/network/
+  • OnlineConnectionDialog.java         src/network/
+
+AI & EFFECTS
+  • ExplosionEffect.java                src/ai/
+
+CONFIGURATION
+  • GameConstants.java                  src/utils/
+  • ScoreManager.java                   src/utils/
+
+COMPILED CODE (Auto-generated)
+  • *.class files                       build/classes/
+  • PongGame.jar                        build/
+
+PLAYER DATA & SAVES
+  • pong_save.dat                       data/saves/
+  • Game saves                          data/Pongus/
+  • Legacy saves                        data/datasaves/
+
+DOCUMENTATION
+  • PROJECT_STRUCTURE.md                root/
+  • DIRECTORY_GUIDE.md                  root/
+  • QUICK_START.md                      root/
+  • STRUCTURE.txt                       root/
+  • ORGANIZATION_SUMMARY.md             root/
+  • README files                        docs/
+  • Backup files                        docs/
+  • VS Code settings                    docs/.vscode/
+
+
+================================================================================
+                          COMPILATION & EXECUTION
+================================================================================
+
+TO COMPILE:
+  $ cd pong_with_learning_ai
+  $ javac src/game/PingPongGame.java
+  
+  This automatically compiles all dependencies!
+
+TO RUN:
+  $ java -cp src game.PingPongGame
+
+  OR
+
+  $ java -jar build/PongGame.jar
+
+
+================================================================================
+                          WHAT TO EDIT FOR COMMON TASKS
+================================================================================
+
+Change game settings (speed, size, colors)
+  → src/utils/GameConstants.java
+
+Add new power-up type
+  → src/entities/PowerUpEntity.java
+  → src/game/PingPongGame.java (for effects)
+
+Improve physics/bounce
+  → src/physics/PhysicsEngine.java
+
+Fix collision bugs
+  → src/physics/CollisionDetector.java
+
+Add online features
+  → src/network/OnlineMultiplayerManager.java
+
+Improve AI
+  → src/game/PingPongGame.java (look for "learningAI")
+
+Add new game mode
+  → src/game/PingPongGame.java
+  → src/utils/GameConstants.java (for constants)
+
+
+================================================================================
+                          DOCUMENTATION GUIDE
+================================================================================
+
+START HERE:
+  1. QUICK_START.md              ← Read this first! (5 min)
+  2. DIRECTORY_GUIDE.md          ← File purposes (10 min)
+  3. PROJECT_STRUCTURE.md        ← Deep dive (15 min)
+
+REFERENCE:
+  • STRUCTURE.txt                ← ASCII visualization
+  • FILE_LOCATIONS.txt           ← This file
+  • ORGANIZATION_SUMMARY.md      ← What changed & why
+
+
+================================================================================
+                          DIRECTORY TREE
+================================================================================
+
+pong_with_learning_ai/
+├── src/
+│   ├── game/               (main engine)
+│   ├── entities/           (game objects)
+│   ├── network/            (online play)
+│   ├── physics/            (physics calculations)
+│   ├── ai/                 (AI behaviors)
+│   └── utils/              (configuration)
+├── build/
+│   ├── classes/            (compiled .class files)
+│   └── PongGame.jar        (executable jar)
+├── data/
+│   └── saves/              (player saves)
+├── docs/                   (documentation)
+├── resources/              (future assets)
+└── *.md files              (documentation)
+
+
+================================================================================
+                          FILE COUNT BY LOCATION
+================================================================================
+
+Source Code:        15 files in src/
+  • game/            1 file
+  • entities/        7 files
+  • network/         2 files
+  • physics/         2 files
+  • ai/              1 file
+  • utils/           2 files
+
+Compiled Output:    Many files in build/
+Documentation:      5 guides in root
+Data:              Multiple saves in data/
+
+
+================================================================================
+                          REMEMBER!
+================================================================================
+
+✓ All Java source files are in src/
+✓ Never edit files in build/ (auto-generated)
+✓ Always compile from project root
+✓ Use src/ as classpath when running
+✓ Keep related code in same folder
+✓ Update documentation when adding features
+
+
+================================================================================

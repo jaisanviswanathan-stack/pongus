@@ -1,0 +1,27 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use open ':encoding(UTF-8)';
+
+my $file = 'PingPongGame.java';
+open(my $fh, '<', $file) or die "Cannot open $file: $!";
+my $content = do { local $/; <$fh> };
+close($fh);
+
+print "Original size: " . length($content) . " bytes\n";
+
+my $count = 0;
+
+# Replace using actual Unicode codepoints that represent these garbled sequences
+# The file shows these are UTF-8 encoded mojibake (garbled text from encoding issues)
+
+# Pattern 1: Up arrow  (c3 83 c6 92 c3 86 e2 80 99 ... c3 83 e2 80 a6 c3 a2 e2 82 ac c2 b9)
+$count += ($content =~ s/\x{C3}\x{83}\x{C6}\x{92}\x{C3}\x{86}\x{E2}\x{80}\x{99}\x{C3}\x{83}\x{E2}\x{80}\x{A0}\x{C3}\x{A2}\x{E2}\x{82}\x{AC}\x{E2}\x{84}\x{A2}\x{C3}\x{83}\x{C6}\x{92}\x{C3}\x{A2}\x{E2}\x{82}\x{AC}\x{C5}\x{A1}\x{C3}\x{83}\x{E2}\x{80}\x{9A}\x{C3}\x{82}\x{C2}\x{A2}\x{C3}\x{83}\x{C6}\x{92}\x{C3}\x{86}\x{E2}\x{80}\x{99}\x{C3}\x{83}\x{E2}\x{80}\x{9A}\x{C3}\x{82}\x{C2}\x{A2}\x{C3}\x{83}\x{C6}\x{92}\x{C3}\x{82}\x{C2}\x{A2}\x{C3}\x{83}\x{C2}\x{A2}\x{C3}\x{A2}\x{E2}\x{80}\x{9A}\x{C2}\x{AC}\x{C3}\x{85}\x{C2}\x{A1}\x{C3}\x{83}\x{E2}\x{80}\x{9A}\x{C3}\x{82}\x{C2}\x{AC}\x{C3}\x{83}\x{C6}\x{92}\x{C3}\x{A2}\x{E2}\x{82}\x{AC}\x{C5}\x{A1}\x{C3}\x{83}\x{E2}\x{80}\x{9A}\x{C3}\x{82}\x{C2}\x{A0}\x{C3}\x{83}\x{C6}\x{92}\x{C3}\x{86}\x{E2}\x{80}\x{99}\x{C3}\x{83}\x{E2}\x{80}\x{9A}\x{C3}\x{82}\x{C2}\x{A2}\x{C3}\x{83}\x{C6}\x{92}\x{C3}\x{82}\x{C2}\x{A2}\x{C3}\x{83}\x{C2}\x{A2}\x{C3}\x{A2}\x{E2}\x{80}\x{9A}\x{C2}\x{AC}\x{C3}\x{85}\x{C2}\x{A1}\x{C3}\x{83}\x{E2}\x{80}\x{9A}\x{C3}\x{82}\x{C2}\x{AC}\x{C3}\x{83}\x{C6}\x{92}\x{C3}\x{A2}\x{E2}\x{82}\x{AC}\x{C2}\x{B9}\x{C3}\x{83}\x{E2}\x{80}\x{A6}\x{C3}\x{A2}\x{E2}\x{82}\x{AC}\x{C5}\x{93}/^/g);
+
+print "Replacements made: $count\n";
+
+open($fh, '>', $file) or die "Cannot write $file: $!";
+print $fh $content;
+close($fh);
+
+print "File updated\n";

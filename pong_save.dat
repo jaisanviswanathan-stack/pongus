@@ -1,0 +1,11 @@
+# Pong Game Save File
+scorePlayer1=0
+scorePlayer2=1
+level1=1
+level2=1
+singlePlayer=true
+aiDifficulty=3
+player1AbilitiesCount=0
+player1BranchesCount=0
+player2AbilitiesCount=0
+player2BranchesCount=0
