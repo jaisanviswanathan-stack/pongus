@@ -1,0 +1,16 @@
+{
+  "name": "pong-game",
+  "version": "1.0.0",
+  "description": "Online Pong Game with Custom Keybinds",
+  "main": "web/server.js",
+  "scripts": {
+    "start": "cd web && npm install && npm start",
+    "dev": "cd web && npm install && npm start"
+  },
+  "engines": {
+    "node": "18.x"
+  },
+  "keywords": ["pong", "game", "online", "multiplayer"],
+  "author": "Jaisan Viswanathan",
+  "license": "MIT"
+}
