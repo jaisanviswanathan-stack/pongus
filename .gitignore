@@ -1,0 +1,88 @@
+# Compiled Java files
+*.class
+*.jar
+*.war
+
+# Build directories
+build/
+bin/
+dist/
+out/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*.iml
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Node/npm
+node_modules/
+npm-debug.log
+yarn-error.log
+.env
+.env.local
+
+# Temp files
+*.tmp
+*.temp
+*.bak
+*.backup
+temp/
+tmp/
+
+# OS files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# BlueJ
+*.ctxt
+package.bluej
+
+# Data files
+*.dat
+pong_save.dat
+
+# Perl/Shell scripts (old tools)
+*.pl
+*.sh
+
+# Legacy/old documentation
+ERRORS_FIXED_REPORT.md
+ALL_ERRORS_FIXED.txt
+JAVA_ERROR_REPORT.txt
+FINAL_SUMMARY.txt
+DIRECTORY_GUIDE.md
+DOCUMENTATION_INDEX.md
+FILE_LOCATIONS.txt
+SUMMARY.txt
+QUICK_START.md
+INSTALLATION_GUIDE.md
+REFACTORING_GUIDE.md
+REFACTORING_STATUS.md
+KEYBINDS_FEATURE.md
+README_REFACTORING.md
+README_MAIN.md
+README.TXT
+QUICK_REFERENCE.md
+RAILWAY_DEPLOYMENT.md
+RUN_GAME.md
+WEB_GAME_SETUP.md
+PROJECT_STRUCTURE.md
+ORGANIZATION_SUMMARY.md
+STRUCTURE.txt
+UPDATES.md
+DEPLOY_NOW.md
+
+# Backup Java files
+*.backup
+*.bak
+
+# Resources (optional - include if needed)
+# resources/

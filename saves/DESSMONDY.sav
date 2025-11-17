@@ -1,0 +1,18 @@
+# Pong Game Save File
+saveName=DESSMONDY
+scorePlayer1=6
+scorePlayer2=8
+level1=2
+level2=2
+singlePlayer=false
+aiDifficulty=1
+player1AbilitiesCount=1
+p1ability=reverse_controls:1
+player1BranchesCount=0
+player2AbilitiesCount=1
+p2ability=gun:1
+player2BranchesCount=0
+player1UpKey=87
+player1DownKey=83
+player2UpKey=222
+player2DownKey=47

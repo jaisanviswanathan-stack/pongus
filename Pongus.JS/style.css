@@ -1,0 +1,230 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    color: #fff;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.container {
+    text-align: center;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 30px;
+    border-radius: 15px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+h1 {
+    font-size: 2.5em;
+    margin-bottom: 20px;
+    background: linear-gradient(135deg, #00ffff, #ff00ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+#gameCanvas {
+    border: 4px solid #00ffff;
+    border-radius: 8px;
+    display: block;
+    margin: 20px auto;
+    background: linear-gradient(180deg, #0a1428 0%, #141f2a 100%);
+    box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+}
+
+.controls {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin: 20px 0;
+}
+
+.btn {
+    padding: 10px 20px;
+    font-size: 1em;
+    background: linear-gradient(135deg, #00ffff, #0099ff);
+    color: #000;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 15px rgba(0, 255, 255, 0.8);
+}
+
+.btn:active {
+    transform: scale(0.98);
+}
+
+.info {
+    margin-top: 20px;
+    font-size: 0.9em;
+    line-height: 1.6;
+    color: #aaa;
+}
+
+#gameStatus {
+    color: #00ff00;
+    font-weight: bold;
+    margin-top: 10px;
+}
+
+/* Modal Styles */
+.modal {
+    display: none;
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.7);
+    animation: fadeIn 0.3s;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.modal-content {
+    background: #1a1a2e;
+    margin: 5% auto;
+    padding: 30px;
+    border: 2px solid #00ffff;
+    border-radius: 10px;
+    width: 90%;
+    max-width: 500px;
+    animation: slideIn 0.3s;
+}
+
+@keyframes slideIn {
+    from { transform: translateY(-50px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.close {
+    color: #00ffff;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.close:hover {
+    color: #ff00ff;
+}
+
+.modal h2 {
+    margin-bottom: 20px;
+    color: #00ffff;
+}
+
+.settings-group {
+    margin: 15px 0;
+    text-align: left;
+}
+
+.settings-group label {
+    display: block;
+    margin: 8px 0;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.settings-group label:hover {
+    color: #00ffff;
+}
+
+.settings-group input[type="radio"],
+.settings-group input[type="checkbox"] {
+    margin-right: 8px;
+}
+
+.settings-group select {
+    width: 100%;
+    padding: 8px;
+    background: #141f2a;
+    color: #00ffff;
+    border: 1px solid #00ffff;
+    border-radius: 5px;
+    font-size: 1em;
+}
+
+/* Larger Modal Styles */
+.modal-large {
+    width: 95%;
+    max-width: 700px;
+}
+
+/* Branch Button Styles */
+.branch-btn {
+    padding: 15px 20px;
+    font-size: 1.1em;
+    background: linear-gradient(135deg, #00ffff, #0099ff);
+    transition: all 0.3s;
+}
+
+.branch-btn:hover {
+    transform: scale(1.08);
+    background: linear-gradient(135deg, #00ffff, #00ff00);
+    box-shadow: 0 0 20px rgba(0, 255, 255, 0.8);
+}
+
+/* List Item Styles */
+.list-item {
+    padding: 12px;
+    margin: 5px 0;
+    background: #141f2a;
+    border: 1px solid #0099ff;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: #00ffff;
+    font-weight: bold;
+    text-align: left;
+}
+
+.list-item:hover {
+    background: #0099ff;
+    color: #000;
+    transform: translateX(5px);
+    box-shadow: 0 0 15px rgba(0, 153, 255, 0.6);
+}
+
+/* Cheat Menu Button Styles */
+.cheat-option-btn {
+    padding: 12px 20px;
+    font-size: 1.05em;
+    background: linear-gradient(135deg, #ff6400, #ff9900);
+    color: #000;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: all 0.2s;
+    width: 100%;
+}
+
+.cheat-option-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 15px rgba(255, 100, 0, 0.8);
+}
+
+.cheat-option-btn:active {
+    transform: scale(0.98);
+}
