@@ -412,21 +412,43 @@ class PongGame {
         if (!document.fullscreenElement) {
             elem.requestFullscreen().catch(err => console.log('Fullscreen error:', err));
             document.body.classList.add('fullscreen');
+            this.container.style.display = 'none';
             const controls = document.querySelector('.controls');
             const info = document.querySelector('.info');
             if (controls) controls.style.display = 'none';
             if (info) info.style.display = 'none';
-            this.canvas.width = window.innerWidth;
-            this.canvas.height = window.innerHeight;
+
+            // Use screen.width and screen.height for true fullscreen
+            this.canvas.width = screen.width;
+            this.canvas.height = screen.height;
+            this.canvas.style.display = 'block';
+            this.canvas.style.width = '100%';
+            this.canvas.style.height = '100%';
+            this.canvas.style.position = 'fixed';
+            this.canvas.style.top = '0';
+            this.canvas.style.left = '0';
+            this.canvas.style.margin = '0';
+            this.canvas.style.padding = '0';
+            this.canvas.style.border = 'none';
         } else {
             document.exitFullscreen();
             document.body.classList.remove('fullscreen');
+            this.container.style.display = 'block';
             const controls = document.querySelector('.controls');
             const info = document.querySelector('.info');
             if (controls) controls.style.display = 'flex';
             if (info) info.style.display = 'block';
+
+            // Restore original canvas size and styling
             this.canvas.width = CANVAS_WIDTH;
             this.canvas.height = CANVAS_HEIGHT;
+            this.canvas.style.display = 'block';
+            this.canvas.style.width = 'auto';
+            this.canvas.style.height = 'auto';
+            this.canvas.style.position = 'static';
+            this.canvas.style.margin = '20px auto';
+            this.canvas.style.padding = '0';
+            this.canvas.style.border = '4px solid #00ffff';
         }
     }
     
@@ -1551,18 +1573,28 @@ class PongGame {
             // Player 2 scores - apply double_points bonus
             const doublePointsLevel = this.player2Abilities.get('double_points') || 0;
             const points = 1 + doublePointsLevel; // Level 1 = 2 pts, Level 2 = 3 pts, etc.
-            
+
             this.scorePlayer2 += points;
             this.totalPointsThisLevel2 += points;
+
+            // Visual feedback - explosion effect at the boundary
+            this.createParticleEffect(10, CANVAS_HEIGHT / 2, 30, '#ff6464');
+            this.createImpactEffect(10, CANVAS_HEIGHT / 2);
+
             this.checkLevelUp(2);
             this.resetBallPosition('right');
         } else if (this.ballX > CANVAS_WIDTH) {
             // Player 1 scores - apply double_points bonus
             const doublePointsLevel = this.player1Abilities.get('double_points') || 0;
             const points = 1 + doublePointsLevel; // Level 1 = 2 pts, Level 2 = 3 pts, etc.
-            
+
             this.scorePlayer1 += points;
             this.totalPointsThisLevel1 += points;
+
+            // Visual feedback - explosion effect at the boundary
+            this.createParticleEffect(CANVAS_WIDTH - 10, CANVAS_HEIGHT / 2, 30, '#00ffff');
+            this.createImpactEffect(CANVAS_WIDTH - 10, CANVAS_HEIGHT / 2);
+
             this.checkLevelUp(1);
             this.resetBallPosition('left');
         }
