@@ -409,12 +409,15 @@ class PongGame {
     }
 
     toggleFullscreen() {
+        console.log('toggleFullscreen called. Current isFullscreen:', this.isFullscreen);
         if (!this.isFullscreen) {
             // Entering fullscreen
+            console.log('Entering fullscreen mode');
             this.isFullscreen = true;
             this.enterSimulatedFullscreen();
         } else {
             // Exiting fullscreen
+            console.log('Exiting fullscreen mode');
             this.isFullscreen = false;
             document.exitFullscreen().catch(err => console.log('Exit fullscreen error:', err));
             this.exitSimulatedFullscreen();
@@ -463,6 +466,9 @@ class PongGame {
 
         console.log(`Fullscreen mode entered: ${this.canvas.width}x${this.canvas.height}`);
 
+        // Force an immediate render to show the game
+        this.render();
+
         // Try to request fullscreen from document element
         const elem = document.documentElement;
         elem.requestFullscreen().catch(err => {
@@ -506,6 +512,9 @@ class PongGame {
         }
 
         console.log('Fullscreen mode exited');
+
+        // Force an immediate render to show the normal view
+        this.render();
     }
 
     showSettings() {
