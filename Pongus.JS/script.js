@@ -410,56 +410,83 @@ class PongGame {
     toggleFullscreen() {
         const elem = document.documentElement;
         if (!document.fullscreenElement) {
-            elem.requestFullscreen().catch(err => console.log('Fullscreen error:', err));
-            document.body.classList.add('fullscreen');
-            this.container.style.display = 'none';
-            const controls = document.querySelector('.controls');
-            const info = document.querySelector('.info');
-            if (controls) controls.style.display = 'none';
-            if (info) info.style.display = 'none';
+            // Entering fullscreen
+            elem.requestFullscreen().catch(err => {
+                console.log('Fullscreen error:', err);
+                this.enterFullscreenFallback();
+            });
 
-            // Use window dimensions for fullscreen
-            this.canvas.width = window.innerWidth;
-            this.canvas.height = window.innerHeight;
-            // Re-get context after canvas resize
-            this.ctx = this.canvas.getContext('2d');
-
-            this.canvas.style.display = 'block';
-            this.canvas.style.width = '100%';
-            this.canvas.style.height = '100%';
-            this.canvas.style.position = 'fixed';
-            this.canvas.style.top = '0';
-            this.canvas.style.left = '0';
-            this.canvas.style.margin = '0';
-            this.canvas.style.padding = '0';
-            this.canvas.style.border = 'none';
-            this.canvas.style.backgroundColor = '#0a1428';
+            // Add small delay to ensure fullscreen is registered
+            setTimeout(() => {
+                this.enterFullscreenFallback();
+            }, 100);
         } else {
-            document.exitFullscreen();
-            document.body.classList.remove('fullscreen');
-            this.container.style.display = 'block';
-            const controls = document.querySelector('.controls');
-            const info = document.querySelector('.info');
-            if (controls) controls.style.display = 'flex';
-            if (info) info.style.display = 'block';
-
-            // Restore original canvas size and styling
-            this.canvas.width = CANVAS_WIDTH;
-            this.canvas.height = CANVAS_HEIGHT;
-            // Re-get context after canvas resize
-            this.ctx = this.canvas.getContext('2d');
-
-            this.canvas.style.display = 'block';
-            this.canvas.style.width = 'auto';
-            this.canvas.style.height = 'auto';
-            this.canvas.style.position = 'static';
-            this.canvas.style.margin = '20px auto';
-            this.canvas.style.padding = '0';
-            this.canvas.style.border = '4px solid #00ffff';
-            this.canvas.style.backgroundColor = 'transparent';
+            // Exiting fullscreen
+            document.exitFullscreen().catch(err => console.log('Exit fullscreen error:', err));
+            setTimeout(() => {
+                this.exitFullscreenFallback();
+            }, 100);
         }
     }
-    
+
+    enterFullscreenFallback() {
+        document.body.classList.add('fullscreen');
+        this.container.style.display = 'none';
+        const controls = document.querySelector('.controls');
+        const info = document.querySelector('.info');
+        if (controls) controls.style.display = 'none';
+        if (info) info.style.display = 'none';
+
+        // Use window dimensions for fullscreen
+        this.canvas.width = window.innerWidth;
+        this.canvas.height = window.innerHeight;
+
+        // Re-get context after canvas resize
+        this.ctx = this.canvas.getContext('2d');
+
+        this.canvas.style.display = 'block';
+        this.canvas.style.width = '100vw';
+        this.canvas.style.height = '100vh';
+        this.canvas.style.position = 'fixed';
+        this.canvas.style.top = '0';
+        this.canvas.style.left = '0';
+        this.canvas.style.margin = '0';
+        this.canvas.style.padding = '0';
+        this.canvas.style.border = 'none';
+        this.canvas.style.backgroundColor = '#0a0a0a';
+        this.canvas.style.zIndex = '9999';
+
+        console.log(`Fullscreen entered: ${this.canvas.width}x${this.canvas.height}`);
+    }
+
+    exitFullscreenFallback() {
+        document.body.classList.remove('fullscreen');
+        this.container.style.display = 'block';
+        const controls = document.querySelector('.controls');
+        const info = document.querySelector('.info');
+        if (controls) controls.style.display = 'flex';
+        if (info) info.style.display = 'block';
+
+        // Restore original canvas size and styling
+        this.canvas.width = CANVAS_WIDTH;
+        this.canvas.height = CANVAS_HEIGHT;
+
+        // Re-get context after canvas resize
+        this.ctx = this.canvas.getContext('2d');
+
+        this.canvas.style.display = 'block';
+        this.canvas.style.width = 'auto';
+        this.canvas.style.height = 'auto';
+        this.canvas.style.position = 'static';
+        this.canvas.style.margin = '20px auto';
+        this.canvas.style.padding = '0';
+        this.canvas.style.border = '4px solid #00ffff';
+        this.canvas.style.backgroundColor = 'transparent';
+        this.canvas.style.zIndex = 'auto';
+
+        console.log('Fullscreen exited');
+    }
+
     showSettings() {
         document.getElementById('settingsModal').style.display = 'block';
     }
