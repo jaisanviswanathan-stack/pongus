@@ -409,7 +409,7 @@ class PongGame {
     }
 
     toggleFullscreen() {
-        if (!document.fullscreenElement) {
+        if (!this.isFullscreen) {
             // Entering fullscreen
             this.isFullscreen = true;
             this.enterSimulatedFullscreen();
@@ -417,9 +417,7 @@ class PongGame {
             // Exiting fullscreen
             this.isFullscreen = false;
             document.exitFullscreen().catch(err => console.log('Exit fullscreen error:', err));
-            setTimeout(() => {
-                this.exitSimulatedFullscreen();
-            }, 50);
+            this.exitSimulatedFullscreen();
         }
     }
 
