@@ -2119,23 +2119,27 @@ class PongGame {
     }
     
     render() {
+        // Use actual canvas dimensions (supports fullscreen)
+        const canvasWidth = this.canvas.width;
+        const canvasHeight = this.canvas.height;
+
         // Clear canvas
         this.ctx.fillStyle = '#000';
-        this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        
+        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
         // Draw background gradient
-        const gradient = this.ctx.createLinearGradient(0, 0, 0, CANVAS_HEIGHT);
+        const gradient = this.ctx.createLinearGradient(0, 0, 0, canvasHeight);
         gradient.addColorStop(0, '#0a1428');
         gradient.addColorStop(1, '#141f2a');
         this.ctx.fillStyle = gradient;
-        this.ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        this.ctx.fillRect(0, 0, canvasWidth, canvasHeight);
         
         // Draw center line
         this.ctx.strokeStyle = 'rgba(150, 200, 255, 0.5)';
         this.ctx.setLineDash([10, 10]);
         this.ctx.beginPath();
-        this.ctx.moveTo(CANVAS_WIDTH / 2, 0);
-        this.ctx.lineTo(CANVAS_WIDTH / 2, CANVAS_HEIGHT);
+        this.ctx.moveTo(canvasWidth / 2, 0);
+        this.ctx.lineTo(canvasWidth / 2, canvasHeight);
         this.ctx.stroke();
         this.ctx.setLineDash([]);
         
