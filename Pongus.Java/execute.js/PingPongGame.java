@@ -5,19 +5,32 @@
  * @version 156
  */
 
-import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
-import java.awt.datatransfer.*;
+import java.io.*;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.Enumeration;
-import java.io.*;
+import javax.swing.*;
 
 public class PingPongGame extends JPanel implements KeyListener, ActionListener {
- // Multiplayer removed: all online/networking features stripped
+ // ONLINE MULTIPLAYER
+ boolean isOnlineGame = false;
+ boolean isHost = false;
+ NetworkClient networkClient = null;
+ String serverUrl = "http://localhost:3000"; // Default local server
+ int remotePaddleY = 100; // Opponent's paddle position
+ int networkSendCounter = 0;
+ int networkSendInterval = 3; // Send every 3 frames
+
+ // PLAYER OBJECTS - encapsulate all player-specific state
+ Player player1;
+ Player player2;
+
  int ballX = 250, ballY = 150, ballVelX = 2, ballVelY = 2;
  int initialBallVelX = 2, initialBallVelY = 2; // Store initial velocity for power-up restoration
+ int ballNotHitTimer = 0; // Timer since ball was last hit by a player
+ int ballResetThreshold = 1000; // 10 seconds at 100fps - reset ball if not hit
+ // Legacy paddle variables - kept for compatibility during migration
  int paddle1Y = 100, paddle2Y = 100;
  boolean up1 = false, down1 = false, up2 = false, down2 = false;
  public boolean singlePlayer = true;
@@ -29,7 +42,33 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Cheat mode
  String cheatPassword = "zanyscarf16";
  boolean cheatModeEnabled = false;
- 
+
+ // STORY MODE - Progressive ability unlocking with auto-save!
+ boolean storyModeActive = false;
+ int storyModeLevel = 1; // Current level (1-17)
+ int storyModeMaxLevel = 17;
+ ArrayList<String> unlockedAbilities = new ArrayList<>(); // Abilities unlocked so far
+ String storySaveFile = "pongus_story_save.txt";
+
+ // Story Mode Level Structure - defeat bosses, earn ALL their abilities as reward!
+ String[] storyAbilityPool = {
+ "speed_boost", "paddle_growth", "double_points", "slow_opponent", "gun",
+ "ability_stealer", "lag_spike", "reverse_controls", "blind", "shrink_opponent",
+ "ghost_ball", "ability_swap", "gravity_hammer", "magnet_ball", "shadow_clone",
+ "portal_pong", "power_siphon", "time_loop", "haki", "barrier", "trap",
+ "screen_warp", "bankai"
+ };
+ // Bosses ordered from weakest to strongest
+ String[] storyBossNames = {
+ "Speed Demon", "Point Hunter", "The Wall", "Slow Mo Joe",
+ "Gunslinger", "Glitch Lord", "The Thief", "Mind Bender", "The Phantom",
+ "Ghost", "Hammer Time", "Shadow Ninja", "Portal Master", "Time Lord",
+ "Haki Master", "Bankai Lord", "ULTIMATE CHAMPION"
+ };
+ int[] storyLevelScoreToWin = {5, 5, 5, 7, 7, 7, 7, 10, 10, 10, 10, 12, 12, 12, 12, 15, 20};
+ int storyBossScore = 0;
+ int storyPlayerScore = 0;
+
  // Learning AI system - CHESS COACH STYLE (adjusts to player skill)
  boolean learningAIEnabled = false; // Enabled only in Learning AI mode (difficulty 4)
  ArrayList<Integer> playerPositionHistory = new ArrayList<>(); // Track player paddle positions
@@ -102,7 +141,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Ability branches - tracks which branch was chosen at level 3 (1 or 2, 0 = not chosen yet)
  HashMap<String, Integer> player1AbilityBranches = new HashMap<>();
  HashMap<String, Integer> player2AbilityBranches = new HashMap<>();
- String[] allAbilities = {"speed_boost", "paddle_growth", "double_points", "slow_opponent", "gun", "ability_stealer", "lag_spike", "reverse_controls", "joshua", "blind", "shrink_opponent", "ghost_ball", "jaisan", "ability_swap", "gravity_hammer", "magnet_ball", "shadow_clone", "portal_pong", "power_siphon", "time_loop"};
+ String[] allAbilities = {"speed_boost", "paddle_growth", "double_points", "slow_opponent", "gun", "ability_stealer", "lag_spike", "reverse_controls", "joshua", "blind", "shrink_opponent", "ghost_ball", "jaisan", "ability_swap", "gravity_hammer", "magnet_ball", "shadow_clone", "portal_pong", "power_siphon", "time_loop", "haki", "barrier", "trap", "screen_warp", "bankai"};
  
  // Gun ability tracking
  int player1GunTimer = 0, player2GunTimer = 0, gunCooldown = 300; // 3 seconds
@@ -150,7 +189,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Shrink Opponent tracking
  int player1ShrinkTimer = 0, player2ShrinkTimer = 0;
  int player1ShrinkEffectTimer = 0, player2ShrinkEffectTimer = 0;
- int shrinkCooldown = 670; // 4 seconds
+ int shrinkCooldown = 500; // 5 seconds
  
  // Ghost Ball tracking
  int player1GhostTimer = 0, player2GhostTimer = 0;
@@ -170,8 +209,8 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int player1FlashActive = 0, player2FlashActive = 0, flashDuration = 100; // 1 second
  
  // Freeze Ray (slow_opponent branch 1) - freeze opponent
- int player1FreezeTimer = 0, player2FreezeTimer = 0, freezeCooldown = 1000; // 5 seconds (was 8s - BUFFED)
- int player1FreezeActive = 0, player2FreezeActive = 0, freezeDuration = 150; // 1.5 seconds (was 0.8s - BUFFED)
+ int player1FreezeTimer = 0, player2FreezeTimer = 0, freezeCooldown = 500; // 5 seconds
+ int player1FreezeActive = 0, player2FreezeActive = 0, freezeDuration = 150; // 1.5 seconds
  
  // Gravity Well (slow_opponent branch 2) - opponent paddle feels heavier
  int player1GravityActive = 0, player2GravityActive = 0;
@@ -317,9 +356,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  
  int scorePlayer1 = 0, scorePlayer2 = 0;
  int level1 = 1, level2 = 1;
- int pointsToNextLevel1 = 5, pointsToNextLevel2 = 5;
+ int pointsToNextLevel1 = 1, pointsToNextLevel2 = 1;
  int totalPointsThisLevel1 = 0, totalPointsThisLevel2 = 0;
  double ballSpeedMultiplier = 1.0, aiSpeedMultiplier = 1.0;
+ double ballSpeed = 3.0; // Track current ball speed (increases by 0.1 on paddle hits)
+ double initialBallSpeed = 3.0; // Store initial speed for fireball restoration
  ArrayList<PowerUp> powerUps = new ArrayList<>();
  int powerUpSpawnInterval = 500, powerUpTimer = 0;
  int zigzagSpawnTimer = 0; // Timer for zigzag spawning (200 frames = 2 seconds)
@@ -339,7 +380,104 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Evolved abilities auto-level tracking - levels up every 20 points scored
  HashMap<String, Integer> player1EvolvedAbilityPoints = new HashMap<>();
  HashMap<String, Integer> player2EvolvedAbilityPoints = new HashMap<>();
- 
+
+ // HAKI ability tracking (One Piece themed)
+ // Base: Conqueror's Haki - stun opponent briefly (6s cooldown)
+ // Branch 1: Armament Haki - stun + black paddle + phasing ball + debuff immunity (10s cooldown)
+ // Branch 2: Observation Haki - stun + opponent-only slow-mo + trajectory + auto-block (9s cooldown)
+ int player1HakiTimer = 0, player2HakiTimer = 0;
+ int hakiBaseCooldown = 600; // 6 seconds for base
+ int hakiArmamentCooldown = 1000; // 10 seconds for armament branch
+ int hakiObservationCooldown = 900; // 9 seconds for observation branch
+ int player1HakiEffectTimer = 0, player2HakiEffectTimer = 0;
+ int hakiStunDuration = 80; // 0.8 seconds base stun
+ boolean player1ArmamentActive = false, player2ArmamentActive = false;
+ int player1ArmamentDuration = 0, player2ArmamentDuration = 0;
+ int armamentBaseDuration = 300; // 3 seconds
+ boolean player1HakiPhaseActive = false, player2HakiPhaseActive = false; // Ball phases through opponent paddle once
+ boolean player1ObservationActive = false, player2ObservationActive = false;
+ int player1ObservationDuration = 0, player2ObservationDuration = 0;
+ int observationBaseDuration = 200; // 2 seconds
+ boolean player1ObsAutoBlockUsed = false, player2ObsAutoBlockUsed = false; // Auto-block once per activation
+ double player1ObsSlowFactor = 1.0, player2ObsSlowFactor = 1.0; // Opponent paddle slow factor (1.0 = normal)
+
+ // BARRIER ability tracking (Defensive)
+ // Base: Creates a temporary barrier that blocks ball once
+ // Branch 1: Mirror Shield - reflects ball at double speed
+ // Branch 2: Absorption Shield - catches ball and lets you relaunch
+ int player1BarrierTimer = 0, player2BarrierTimer = 0, barrierCooldown = 800; // 8 seconds
+ boolean player1BarrierActive = false, player2BarrierActive = false;
+ int player1BarrierX = 0, player2BarrierX = 0;
+ int player1BarrierY = 0, player2BarrierY = 0;
+ int barrierWidth = 10, barrierHeight = 80;
+ int player1BarrierDuration = 0, player2BarrierDuration = 0;
+ int barrierBaseDuration = 500; // 5 seconds or until hit
+ boolean player1BallAbsorbed = false, player2BallAbsorbed = false;
+ int player1AbsorbedBallTimer = 0, player2AbsorbedBallTimer = 0;
+
+ // TRAP ability tracking (Offensive) - BUFFED!
+ // Base: Place a BIG trap that stuns opponent + redirects ball toward them!
+ // Branch 1: Sticky Trap - Ball FREEZES for 2.5s + 3s reversed controls!
+ // Branch 2: Explosive Trap - MASSIVE shockwave stuns 1.5s + shrinks 2.5s + 2.5x ball speed!
+ int player1TrapTimer = 0, player2TrapTimer = 0, trapCooldown = 350; // 3.5 seconds
+ boolean player1TrapActive = false, player2TrapActive = false;
+ int player1TrapX = 0, player2TrapX = 0;
+ int player1TrapY = 0, player2TrapY = 0;
+ int trapSize = 80; // Big trap!
+ int player1TrapDuration = 0, player2TrapDuration = 0;
+ int trapBaseDuration = 1000; // 10 seconds or until triggered
+ int player1StickyTimer = 0, player2StickyTimer = 0; // Ball slow effect from sticky trap
+ int stickyDuration = 300; // 3 seconds of slow
+ // Ball freeze tracking for sticky trap
+ boolean ballFrozenByTrap = false;
+ int ballFreezeTimer = 0;
+ int frozenBallX = 0, frozenBallY = 0;
+
+ // SCREEN WARP ability tracking (Chaos)
+ // Base: Briefly distorts opponent's view
+ // Branch 1: Full Inversion - flip opponent's screen vertically
+ // Branch 2: Tunnel Vision - shrink opponent's visible area
+ int player1WarpTimer = 0, player2WarpTimer = 0, warpCooldown = 900; // 9 seconds
+ int player1WarpEffectTimer = 0, player2WarpEffectTimer = 0;
+ int warpBaseDuration = 200; // 2 seconds base
+ int player1InversionTimer = 0, player2InversionTimer = 0; // Screen flip effect
+ int player1TunnelTimer = 0, player2TunnelTimer = 0; // Tunnel vision effect
+
+ // BANKAI ability tracking (Bleach themed)
+ // Base: Enter Bankai mode - paddle turns BLACK, gain permanent stacking boosts!
+ // During Bankai: Press ability key to SWING ZANGETSU - ball goes 5x speed!
+ // After 3 uses: Fire a GETSUGA TENSHO sword projectile at opponent!
+ // Branch 1: Zangetsu - more attack power, bigger sword swings
+ // Branch 2: Hollow Form - defense + ball phases through once
+ int player1BankaiTimer = 0, player2BankaiTimer = 0, bankaiCooldown = 1200; // 12 seconds
+ boolean player1BankaiActive = false, player2BankaiActive = false;
+ int player1BankaiDuration = 0, player2BankaiDuration = 0;
+ int bankaiBaseDuration = 800; // 8 seconds of Bankai mode
+ boolean player1ZangetsuActive = false, player2ZangetsuActive = false;
+ boolean player1HollowActive = false, player2HollowActive = false;
+ boolean player1HollowPhased = false, player2HollowPhased = false; // Track if hollow phase was used
+
+ // BANKAI SWORD SWING - Press ability key during Bankai to swing!
+ int player1SwordSwingTimer = 0, player2SwordSwingTimer = 0; // Animation timer
+ int swordSwingDuration = 20; // 0.2 second swing animation
+ int player1SwordSwingCooldown = 0, player2SwordSwingCooldown = 0; // Cooldown between swings
+ int swordSwingCooldownTime = 80; // 0.8 seconds between swings
+ int player1TotalSwordSwings = 0, player2TotalSwordSwings = 0; // Total swings this game
+
+ // GETSUGA TENSHO - Sword projectile fired after 3 swings!
+ ArrayList<GetsugaTensho> getsugaProjectiles = new ArrayList<>();
+
+ // BANKAI PERMANENT BOOSTS - These stack every time you activate Bankai!
+ int player1BankaiStacks = 0, player2BankaiStacks = 0; // Number of times Bankai activated
+ int player1PermanentSpeedBonus = 0, player2PermanentSpeedBonus = 0; // +1 paddle speed per stack
+ int player1PermanentPaddleBonus = 0, player2PermanentPaddleBonus = 0; // +10 paddle height per stack
+ double player1BallSpeedMultiplier = 1.0, player2BallSpeedMultiplier = 1.0; // Ball speed when YOU hit it
+ boolean player1HasBankaiImmunity = false, player2HasBankaiImmunity = false; // Immunity to debuffs (5+ stacks)
+
+ // No-score timer - triggers ability upgrade if 2 minutes pass without scoring
+ int noScoreTimer = 0;
+ int noScoreThreshold = 12000; // 2 minutes in frames (100 fps × 120 seconds)
+
  // Learning AI - tracks and learns from player behavior (CHESS COACH STYLE)
  void updateLearningAI() {
  if (!learningAIEnabled || !singlePlayer) return;
@@ -667,7 +805,19 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  this.level = level;
  }
  }
- 
+
+ // GETSUGA TENSHO - Massive sword wave projectile from Bankai!
+ class GetsugaTensho {
+ int x, y, velocityX, owner, width, height;
+ boolean isEvolved = false; // Evolved version does more
+ GetsugaTensho(int x, int y, int velocityX, int owner, boolean isEvolved) {
+ this.x = x; this.y = y; this.velocityX = velocityX; this.owner = owner;
+ this.isEvolved = isEvolved;
+ this.width = isEvolved ? 80 : 50; // Evolved is bigger
+ this.height = isEvolved ? 120 : 80;
+ }
+ }
+
  class Laser {
  int startX, startY, endX, endY, owner, duration, remainingTime;
  boolean hasStunned = false; // Track if this laser has already stunned
@@ -801,12 +951,18 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  public PingPongGame(boolean isSinglePlayer, int difficulty) {
  this.singlePlayer = isSinglePlayer;
  this.aiDifficulty = difficulty;
- 
+
+ // Initialize Player objects
+ player1 = new Player(1, 10, 100);
+ player2 = new Player(2, 580, 100);
+ player1.name = "Player 1";
+ player2.name = isSinglePlayer ? "AI" : "Player 2";
+
  // Enable Learning AI for difficulty 4
  if (difficulty == 4) {
  learningAIEnabled = true;
  }
- 
+
  // Configure Keybinds
  configureKeybinds(isSinglePlayer);
  
@@ -851,6 +1007,374 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Multiplayer removed: incoming data handler stripped
 
  // Multiplayer removed: outgoing data sender stripped
+
+ // ============== STORY MODE FUNCTIONS ==============
+
+ void saveStoryProgress() {
+ try {
+ java.io.PrintWriter writer = new java.io.PrintWriter(storySaveFile);
+ writer.println("storyLevel=" + storyModeLevel);
+ writer.println("unlockedAbilities=" + String.join(",", unlockedAbilities));
+ writer.close();
+ } catch (Exception e) {
+ System.out.println("Could not save story progress: " + e.getMessage());
+ }
+ }
+
+ void loadStoryProgress() {
+ try {
+ java.io.File file = new java.io.File(storySaveFile);
+ if (file.exists()) {
+ java.util.Scanner scanner = new java.util.Scanner(file);
+ while (scanner.hasNextLine()) {
+ String line = scanner.nextLine();
+ if (line.startsWith("storyLevel=")) {
+ storyModeLevel = Integer.parseInt(line.substring(11));
+ } else if (line.startsWith("unlockedAbilities=")) {
+ String abilities = line.substring(18);
+ unlockedAbilities.clear();
+ if (!abilities.isEmpty()) {
+ for (String ability : abilities.split(",")) {
+ if (!ability.trim().isEmpty()) {
+ unlockedAbilities.add(ability.trim());
+ }
+ }
+ }
+ }
+ }
+ scanner.close();
+ }
+ } catch (Exception e) {
+ System.out.println("Could not load story progress: " + e.getMessage());
+ storyModeLevel = 1;
+ unlockedAbilities.clear();
+ }
+ }
+
+ void initializeStoryMode() {
+ loadStoryProgress();
+
+ // Player starts with NO abilities - earn them by defeating bosses!
+
+ storyModeActive = true;
+ storyPlayerScore = 0;
+ storyBossScore = 0;
+
+ // Show the story map!
+ showStoryMap();
+ }
+
+ void showStoryMap() {
+ // Build level list entries for scrollable list
+ ArrayList<String> levelEntries = new ArrayList<>();
+ int defaultSelection = 0;
+ for (int i = 0; i < storyModeMaxLevel; i++) {
+ String status;
+ if (i < storyModeLevel - 1) {
+ status = "[COMPLETE]";
+ } else if (i == storyModeLevel - 1) {
+ status = ">> CURRENT - Score " + storyLevelScoreToWin[i] + " to win!";
+ defaultSelection = i;
+ } else {
+ status = "[LOCKED]";
+ }
+ levelEntries.add(String.format("Level %2d: %-20s %s", i + 1, storyBossNames[i], status));
+ }
+
+ // Build abilities text
+ String abilitiesText;
+ if (unlockedAbilities.isEmpty()) {
+ abilitiesText = "YOUR ABILITIES: None yet - defeat bosses to earn them!";
+ } else {
+ abilitiesText = "YOUR ABILITIES: " + String.join(", ", unlockedAbilities);
+ }
+
+ // Create scrollable list
+ JList<String> levelList = new JList<>(levelEntries.toArray(new String[0]));
+ levelList.setFont(new Font("Monospaced", Font.PLAIN, 13));
+ levelList.setSelectedIndex(defaultSelection);
+ levelList.ensureIndexIsVisible(defaultSelection);
+ // Only allow selecting playable levels
+ levelList.setSelectionModel(new javax.swing.DefaultListSelectionModel() {
+ @Override
+ public void setSelectionInterval(int i0, int i1) {
+ if (i0 < storyModeLevel) super.setSelectionInterval(i0, i1);
+ }
+ });
+
+ JScrollPane scrollPane = new JScrollPane(levelList);
+ scrollPane.setPreferredSize(new java.awt.Dimension(500, 300));
+
+ // Build panel
+ JPanel panel = new JPanel(new java.awt.BorderLayout(5, 5));
+ JLabel title = new JLabel("=== STORY MODE - WORLD MAP ===");
+ title.setFont(new Font("Arial", Font.BOLD, 16));
+ title.setHorizontalAlignment(JLabel.CENTER);
+ panel.add(title, java.awt.BorderLayout.NORTH);
+ panel.add(scrollPane, java.awt.BorderLayout.CENTER);
+ JLabel abilities = new JLabel("<html><b>" + abilitiesText + "</b></html>");
+ abilities.setFont(new Font("Arial", Font.PLAIN, 12));
+ panel.add(abilities, java.awt.BorderLayout.SOUTH);
+
+ String[] buttons = {"Play Selected Level", "Back to Main Menu"};
+ int choice = JOptionPane.showOptionDialog(null,
+ panel,
+ "STORY MODE MAP",
+ JOptionPane.DEFAULT_OPTION,
+ JOptionPane.PLAIN_MESSAGE,
+ null,
+ buttons,
+ buttons[0]);
+
+ if (choice != 0) {
+ // Back to main menu or closed
+ storyModeActive = false;
+ return;
+ }
+
+ int selectedIndex = levelList.getSelectedIndex();
+ if (selectedIndex < 0 || selectedIndex >= storyModeLevel) {
+ // Invalid selection, show map again
+ showStoryMap();
+ return;
+ }
+
+ int selectedLevel = selectedIndex + 1;
+ storyModeLevel = selectedLevel;
+
+ // Show level intro
+ String currentBoss = storyBossNames[selectedLevel - 1];
+ int scoreNeeded = storyLevelScoreToWin[selectedLevel - 1];
+
+ JOptionPane.showMessageDialog(null,
+ "=== LEVEL " + selectedLevel + " ===\n\n" +
+ "BOSS: " + currentBoss + "\n" +
+ "Score " + scoreNeeded + " points to win!\n\n" +
+ "Defeat the boss to earn a new ability!\n\n" +
+ "Get ready!",
+ "Battle Start!", JOptionPane.INFORMATION_MESSAGE);
+
+ startStoryLevel();
+ }
+
+ void startStoryLevel() {
+ // Reset scores
+ scorePlayer1 = 0;
+ scorePlayer2 = 0;
+ storyPlayerScore = 0;
+ storyBossScore = 0;
+
+ // Clear player abilities and give only unlocked ones
+ player1Abilities.clear();
+ player2Abilities.clear();
+ player1AbilityBranches.clear();
+ player2AbilityBranches.clear();
+
+ // Give player their unlocked abilities at level 1
+ for (String ability : unlockedAbilities) {
+ player1Abilities.put(ability, 1);
+ }
+
+ // Boss gets abilities based on level
+ configureBossAbilities();
+
+ // Reset ball
+ ballX = 295;
+ ballY = 200;
+ ballVelX = 3;
+ ballVelY = 2;
+ ballSpeed = 5.0;
+
+ // Set AI difficulty based on story level (ordered weakest to strongest)
+ if (storyModeLevel <= 3) aiDifficulty = 1;
+ else if (storyModeLevel <= 7) aiDifficulty = 2;
+ else if (storyModeLevel <= 14) aiDifficulty = 3;
+ else aiDifficulty = 4;
+ singlePlayer = true;
+ }
+
+ void configureBossAbilities() {
+ // Boss gets themed abilities based on level - evolved with branches!
+ // Ordered from weakest to strongest
+ switch (storyModeLevel) {
+ case 1: // Speed Demon
+ player2Abilities.put("speed_boost", 3);
+ player2AbilityBranches.put("speed_boost", 1); // Sonic - dash
+ break;
+ case 2: // Point Hunter
+ player2Abilities.put("double_points", 3);
+ player2AbilityBranches.put("double_points", 1); // Point Leech
+ break;
+ case 3: // The Wall
+ player2Abilities.put("paddle_growth", 3);
+ player2AbilityBranches.put("paddle_growth", 1); // Titan Mode
+ player2Abilities.put("shield", 2);
+ player2Abilities.put("barrier", 3);
+ player2AbilityBranches.put("barrier", 1);
+ break;
+ case 4: // Slow Mo Joe
+ player2Abilities.put("slow_opponent", 3);
+ player2AbilityBranches.put("slow_opponent", 1); // Freeze Ray
+ break;
+ case 5: // Gunslinger
+ player2Abilities.put("gun", 3);
+ player2AbilityBranches.put("gun", 1); // Goku laser
+ break;
+ case 6: // Glitch Lord
+ player2Abilities.put("lag_spike", 3);
+ player2AbilityBranches.put("lag_spike", 1); // Quantum Glitch
+ break;
+ case 7: // The Thief
+ player2Abilities.put("ability_stealer", 3);
+ player2AbilityBranches.put("ability_stealer", 1); // Hijacker
+ player2Abilities.put("ability_swap", 2);
+ player2Abilities.put("trap", 3);
+ player2AbilityBranches.put("trap", 1);
+ break;
+ case 8: // Mind Bender
+ player2Abilities.put("reverse_controls", 3);
+ player2AbilityBranches.put("reverse_controls", 1); // Chaos Engine
+ player2Abilities.put("screen_warp", 3);
+ player2AbilityBranches.put("screen_warp", 1);
+ break;
+ case 9: // The Phantom
+ player2Abilities.put("blind", 3);
+ player2AbilityBranches.put("blind", 1); // Total Darkness
+ player2Abilities.put("shrink_opponent", 3);
+ player2AbilityBranches.put("shrink_opponent", 1); // Micro Ray
+ break;
+ case 10: // Ghost
+ player2Abilities.put("ghost_ball", 3);
+ player2AbilityBranches.put("ghost_ball", 1); // Void Pulse
+ break;
+ case 11: // Hammer Time
+ player2Abilities.put("gravity_hammer", 3);
+ player2AbilityBranches.put("gravity_hammer", 1);
+ player2Abilities.put("magnet_ball", 3);
+ player2AbilityBranches.put("magnet_ball", 1);
+ break;
+ case 12: // Shadow Ninja
+ player2Abilities.put("shadow_clone", 3);
+ player2AbilityBranches.put("shadow_clone", 1);
+ break;
+ case 13: // Portal Master
+ player2Abilities.put("portal_pong", 3);
+ player2AbilityBranches.put("portal_pong", 1);
+ player2Abilities.put("power_siphon", 3);
+ player2AbilityBranches.put("power_siphon", 1);
+ break;
+ case 14: // Time Lord
+ player2Abilities.put("time_loop", 3);
+ player2AbilityBranches.put("time_loop", 1);
+ break;
+ case 15: // Haki Master
+ player2Abilities.put("haki", 3);
+ player2AbilityBranches.put("haki", 1); // Armament Haki
+ break;
+ case 16: // Bankai Lord
+ player2Abilities.put("bankai", 4);
+ player2AbilityBranches.put("bankai", 1);
+ break;
+ case 17: // ULTIMATE CHAMPION - every ability at level 1!
+ for (String ability : storyAbilityPool) {
+ player2Abilities.put(ability, 1);
+ }
+ break;
+ }
+ }
+
+ void handleStoryModeVictory() {
+ String currentBoss = storyBossNames[storyModeLevel - 1];
+
+ // Boss reward mapping - player gets ALL boss abilities automatically
+ String[][] bossRewards = {
+ {"speed_boost"},                          // 1: Speed Demon
+ {"double_points"},                        // 2: Point Hunter
+ {"paddle_growth", "shield", "barrier"},    // 3: The Wall
+ {"slow_opponent"},                        // 4: Slow Mo Joe
+ {"gun"},                                  // 5: Gunslinger
+ {"lag_spike"},                            // 6: Glitch Lord
+ {"ability_stealer", "ability_swap", "trap"}, // 7: The Thief
+ {"reverse_controls", "screen_warp"},       // 8: Mind Bender
+ {"blind", "shrink_opponent"},              // 9: The Phantom
+ {"ghost_ball"},                           // 10: Ghost
+ {"gravity_hammer", "magnet_ball"},         // 11: Hammer Time
+ {"shadow_clone"},                         // 12: Shadow Ninja
+ {"portal_pong", "power_siphon"},           // 13: Portal Master
+ {"time_loop"},                            // 14: Time Lord
+ {"haki"},                                 // 15: Haki Master
+ {"bankai"},                               // 16: Bankai Lord
+ {}                                        // 17: ULTIMATE CHAMPION - no reward (final boss)
+ };
+
+ // Get rewards for this boss
+ String[] rewards = bossRewards[storyModeLevel - 1];
+
+ // Filter out abilities player already has
+ ArrayList<String> newAbilities = new ArrayList<>();
+ for (String ability : rewards) {
+ if (!unlockedAbilities.contains(ability)) {
+ unlockedAbilities.add(ability);
+ newAbilities.add(ability);
+ }
+ }
+
+ if (storyModeLevel == storyModeMaxLevel) {
+ // ULTIMATE CHAMPION - just victory message
+ JOptionPane.showMessageDialog(null,
+ "=== LEVEL " + storyModeLevel + " COMPLETE! ===\n" +
+ "You defeated " + currentBoss + "!\n\n" +
+ "You are the TRUE PONGUS MASTER!",
+ "Victory!", JOptionPane.INFORMATION_MESSAGE);
+ } else if (newAbilities.size() > 0) {
+ // Show all unlocked abilities
+ StringBuilder sb = new StringBuilder();
+ sb.append("=== LEVEL " + storyModeLevel + " COMPLETE! ===\n");
+ sb.append("You defeated " + currentBoss + "!\n\n");
+ sb.append("Abilities unlocked:\n");
+ for (String ability : newAbilities) {
+ sb.append("  + " + ability.toUpperCase().replace("_", " ") + "\n");
+ }
+ JOptionPane.showMessageDialog(null, sb.toString(),
+ "New Abilities!", JOptionPane.INFORMATION_MESSAGE);
+ } else {
+ // Already have all boss's abilities
+ JOptionPane.showMessageDialog(null,
+ "=== LEVEL " + storyModeLevel + " COMPLETE! ===\n" +
+ "You defeated " + currentBoss + "!\n\n" +
+ "You already have this boss's abilities!",
+ "Victory!", JOptionPane.INFORMATION_MESSAGE);
+ }
+
+ storyModeLevel++;
+ saveStoryProgress(); // Auto-save!
+
+ if (storyModeLevel > storyModeMaxLevel) {
+ // Beat the game!
+ JOptionPane.showMessageDialog(null,
+ "=== CONGRATULATIONS! ===\n\n" +
+ "You have defeated the ULTIMATE CHAMPION!\n\n" +
+ "ALL ABILITIES UNLOCKED!\n\n" +
+ "You are the TRUE PONGUS MASTER!",
+ "STORY COMPLETE!", JOptionPane.INFORMATION_MESSAGE);
+ showStoryMap();
+ } else {
+ showStoryMap();
+ }
+ }
+
+ void handleStoryModeDefeat() {
+ String currentBoss = storyBossNames[storyModeLevel - 1];
+ JOptionPane.showMessageDialog(null,
+ "Defeated by " + currentBoss + "!\n\n" +
+ "Return to the map to try again.",
+ "Defeat!", JOptionPane.INFORMATION_MESSAGE);
+ saveStoryProgress(); // Save progress
+ // Return to map
+ showStoryMap();
+ }
+
+ // ============== END STORY MODE FUNCTIONS ==============
 
  void spawnMapPowerUp() {
  int x = 100 + (int)(Math.random() * 400);
@@ -904,6 +1428,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  case "portal_pong": return "Portal";
  case "power_siphon": return "Siphon";
  case "time_loop": return "TimeLoop";
+ case "haki": return "Haki";
+ case "barrier": return "Barrier";
+ case "trap": return "Trap";
+ case "screen_warp": return "Warp";
+ case "bankai": return "Bankai";
  default: return "?";
  }
  }
@@ -941,6 +1470,28 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  "Active: Press Q/Slash to unleash devastating energy burst! (RARE 10%)\n" +
  "Lv1: Small drain | Lv2: Moderate drain | Lv3+: Choose evolution!";
  case "time_loop": return "Time Loop - Press Q/Slash to rewind time! 0.3s+0.2s/lvl rewind, 20s-0.3s/lvl cooldown. Triggers slow-mo! (VERY RARE 5%)";
+ case "haki": return "HAKI - Conqueror's spirit! Press Q/Slash to unleash!\n" +
+ "Base: Stun opponent with Conqueror's Haki (0.8s stun)\n" +
+ "Lv3+ Branch 1: ARMAMENT - Black paddle, +50% hit power!\n" +
+ "Lv3+ Branch 2: OBSERVATION - See ball trajectory, brief slow-mo! (RARE 8%)";
+ case "barrier": return "BARRIER - Summon a defensive shield!\n" +
+ "Base: Create barrier that blocks ball once (8s cooldown)\n" +
+ "Lv3+ Branch 1: MIRROR SHIELD - Reflects ball at 2x speed!\n" +
+ "Lv3+ Branch 2: ABSORPTION - Catch ball and relaunch! (RARE 10%)";
+ case "trap": return "TRAP - Set deadly traps on the field!\n" +
+ "Base: BIG trap stuns 1.2s + redirects ball at opponent! (3.5s cooldown)\n" +
+ "Lv3+ Branch 1: STICKY TRAP - Ball FREEZES 2.5s + 3s reverse controls!\n" +
+ "Lv3+ Branch 2: EXPLOSIVE TRAP - 1.5s STUN + 2.5s shrink + 2.5x speed! (RARE 12%)";
+ case "screen_warp": return "SCREEN WARP - Reverse opponent's controls!\n" +
+ "Base: REVERSE opponent controls for 2s (9s cooldown)\n" +
+ "Lv3+ Branch 1: INVERSION - Reverse controls + paddle jitter!\n" +
+ "Lv3+ Branch 2: TUNNEL VISION - Ball becomes INVISIBLE near edges! (VERY RARE 5%)";
+ case "bankai": return "BANKAI - ULTIMATE POWER! BLACK PADDLE MODE!\n" +
+ "Activate: Enter Bankai (black paddle) + PERMANENT stat boosts!\n" +
+ "During Bankai: Press ability to SWING ZANGETSU - 5x ball speed!\n" +
+ "Every 3 swings: Fire GETSUGA TENSHO projectile at opponent!\n" +
+ "Lv3+ Branch 1: ZANGETSU - 7x ball speed + bigger Getsuga!\n" +
+ "Lv3+ Branch 2: HOLLOW FORM - Ball phases through once! (ULTRA RARE 2%)";
  default: return "Unknown";
  }
  }
@@ -949,6 +1500,10 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  double speed = 5.0;
  HashMap<String, Integer> abilities = (player == 1) ? player1Abilities : player2Abilities;
  HashMap<String, Integer> opponentAbilities = (player == 1) ? player2Abilities : player1Abilities;
+
+ // BANKAI PERMANENT SPEED BONUS - stacks forever!
+ int permanentSpeedBonus = (player == 1) ? player1PermanentSpeedBonus : player2PermanentSpeedBonus;
+ speed += permanentSpeedBonus;
  
  // Check if opponent has JAISAN (to suppress JOSHUA)
  boolean opponentJaisanActive = (player == 1) ? player2JaisanActive : player1JaisanActive;
@@ -1131,7 +1686,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int baseHeight = shrunk ? 30 : 60;
  HashMap<String, Integer> abilities = (player == 1) ? player1Abilities : player2Abilities;
  HashMap<String, Integer> branches = (player == 1) ? player1AbilityBranches : player2AbilityBranches;
- 
+
+ // BANKAI PERMANENT PADDLE BONUS - stacks forever!
+ int permanentPaddleBonus = (player == 1) ? player1PermanentPaddleBonus : player2PermanentPaddleBonus;
+ baseHeight += permanentPaddleBonus;
+
  // Check if opponent has JAISAN (to suppress JOSHUA)
  boolean opponentJaisanActive = (player == 1) ? player2JaisanActive : player1JaisanActive;
  
@@ -1146,7 +1705,13 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // JAISAN mode - DOMINATES EVERYTHING!
  boolean jaisanActive = (player == 1) ? player1JaisanActive : player2JaisanActive;
  if (jaisanActive) baseHeight = 350; // MASSIVE paddle when JAISAN active! (was 300, now even bigger)
- 
+
+ // BANKAI - Zangetsu mode - 2x paddle size
+ boolean zangetsuActive = (player == 1) ? player1ZangetsuActive : player2ZangetsuActive;
+ if (zangetsuActive && !jaisanActive && !joshuaActive) {
+ baseHeight = baseHeight * 2; // Double paddle size during Zangetsu
+ }
+
  // Shrink Opponent effect (doesn't affect JOSHUA or JAISAN)
  boolean shrinkActive = (player == 1) ? player1ShrinkEffectTimer > 0 : player2ShrinkEffectTimer > 0;
  if (shrinkActive && !joshuaActive && !jaisanActive) baseHeight = 20; // Tiny paddle when shrunk
@@ -1252,12 +1817,17 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  if (ability.equals("ability_swap")) {
  continue; // Skip - only available via random button
  }
- 
+
+ // STORY MODE - Exclude joshua and jaisan entirely
+ if (storyModeActive && (ability.equals("joshua") || ability.equals("jaisan"))) {
+ continue; // Not available in story mode
+ }
+
  // RARITY SYSTEM - Each ability has a chance to appear
  // LEGENDARY (0.1%): jaisan
- // ULTRA RARE (1%): joshua
- // VERY RARE (5%): ghost_ball, time_loop
- // RARE (10-15%): gun, reverse_controls, slow_opponent, double_points, lag_spike, gravity_hammer, magnet_ball, shadow_clone, portal_pong, power_siphon
+ // ULTRA RARE (1-2%): joshua, bankai
+ // VERY RARE (5%): ghost_ball, screen_warp
+ // RARE (8-15%): gun, reverse_controls, slow_opponent, double_points, lag_spike, gravity_hammer, magnet_ball, shadow_clone, portal_pong, power_siphon, haki, barrier, trap, time_loop
  // UNCOMMON (30-35%): ability_stealer, blind
  // COMMON (100%): speed_boost, paddle_growth
  
@@ -1321,6 +1891,22 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  else if (ability.equals("time_loop")) {
  chance = 0.20; // 20% - Made less rare (was 5%)
+ }
+ // NEW ANIME & CHAOS ABILITIES
+ else if (ability.equals("haki")) {
+ chance = 0.08; // 8% RARE - One Piece themed
+ }
+ else if (ability.equals("barrier")) {
+ chance = 0.10; // 10% RARE - Defensive
+ }
+ else if (ability.equals("trap")) {
+ chance = 0.12; // 12% RARE - Offensive
+ }
+ else if (ability.equals("screen_warp")) {
+ chance = 0.05; // 5% VERY RARE - Chaos
+ }
+ else if (ability.equals("bankai")) {
+ chance = 0.02; // 2% ULTRA RARE - Bleach themed
  }
  // COMMON - 100% (always appear)
  // speed_boost, paddle_growth
@@ -1550,6 +2136,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  case "portal_pong": return "Wormhole Master";
  case "power_siphon": return "Soul Reaper";
  case "time_loop": return "Chronos Rewind";
+ case "haki": return "Armament Haki";
+ case "barrier": return "Mirror Shield";
+ case "trap": return "Sticky Trap";
+ case "screen_warp": return "Full Inversion";
+ case "bankai": return "Zangetsu";
  default: return "Branch 1";
  }
  } else {
@@ -1579,6 +2170,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  case "portal_pong": return "Dimensional Rift";
  case "power_siphon": return "Overload";
  case "time_loop": return "Temporal Echo";
+ case "haki": return "Observation Haki";
+ case "barrier": return "Absorption Shield";
+ case "trap": return "Explosive Trap";
+ case "screen_warp": return "Tunnel Vision";
+ case "bankai": return "Hollow Form";
  default: return "Branch 2";
  }
  }
@@ -1656,10 +2252,47 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  " Can see GHOST TRAIL of ball's future path during slow-mo\n" +
  " Rewind also restores 10% paddle position\n" +
  "Bend time itself to your advantage!";
+ case "haki": return "ARMAMENT HAKI - The ultimate offensive Haki!\n" +
+ " STILL STUNS opponent with Conqueror's Haki on activation!\n" +
+ " Paddle turns BLACK for 3s (+0.5s per level)\n" +
+ " Hits deal +50% ball speed increase!\n" +
+ " Ball PHASES THROUGH opponent's paddle once (unblockable!)\n" +
+ " Immune to all debuffs while active\n" +
+ " Cooldown: 10s base - 0.3s per level\n" +
+ "An unstoppable force of will!";
+ case "barrier": return "MIRROR SHIELD - Perfect reflection defense!\n" +
+ " Barrier reflects ball at 2x speed!\n" +
+ " Reflected ball is HOMING toward opponent goal\n" +
+ " Barrier lasts 5s (+1s per level) or until hit\n" +
+ " Can place barrier anywhere in your half\n" +
+ " Cooldown: 8s base - 0.5s per level\n" +
+ "Turn their attack into your weapon!";
+ case "trap": return "STICKY TRAP - Ball FREEZES in place!\n" +
+ " Ball completely STOPS for 2.5 seconds!\n" +
+ " Opponent controls REVERSED for 3 seconds!\n" +
+ " Ball releases at high speed after freeze\n" +
+ " BIG 80px trap, lasts 10s (+1.5s per level)\n" +
+ " Cooldown: 3.5s base - 0.3s per level\n" +
+ "Total ball control!";
+ case "screen_warp": return "FULL INVERSION - Total control chaos!\n" +
+ " Opponent's controls REVERSED for 2s (+0.3s per level)\n" +
+ " PLUS: Random paddle JITTER makes aiming impossible!\n" +
+ " Paddle shakes randomly while trying to move\n" +
+ " Stack with other chaos effects!\n" +
+ " Cooldown: 9s base - 0.5s per level\n" +
+ "Watch them struggle to control their paddle!";
+ case "bankai": return "ZANGETSU - Ichigo's ultimate sword!\n" +
+ " Paddle turns BLACK with dark aura\n" +
+ " Swing Zangetsu: Press ability during Bankai = 7x BALL SPEED!\n" +
+ " Every 3 swings: Fire GETSUGA TENSHO projectile!\n" +
+ " Evolved Getsuga: STEALS A POINT on hit!\n" +
+ " PERMANENT boosts stack each Bankai activation!\n" +
+ " Duration: 8s (+1s per level), Cooldown: 12s\n" +
+ "BANKAI - TENSA ZANGETSU!";
  default: return "Enhanced version";
  }
  }
- 
+
  String getBranch2Description(String ability) {
  switch (ability) {
  case "gun": return "VEGETA - Shoots explosive Big Bang Attack projectiles! Each level adds: +1 projectile in spread pattern (Lv3=1 shot, Lv4=2, Lv5=3...), +faster projectile speed, +larger explosion radius (+10px per level), +stronger stun on hit! Devastating area damage that scales infinitely!";
@@ -1739,10 +2372,48 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  " Cooldown: 25s (decreases 0.8s per level)\n" +
  " No slow-mo effect (instant chaos instead)\n" +
  "Split reality and overwhelm your opponent!";
+ case "haki": return "OBSERVATION HAKI - The ultimate defensive Haki!\n" +
+ " STILL STUNS opponent with Conqueror's Haki on activation!\n" +
+ " See ball trajectory for next 3 bounces\n" +
+ " Ball slows to 60% speed for 2s (+0.3s per level)\n" +
+ " Opponent's paddle moves at 50% speed!\n" +
+ " AUTO-BLOCK: Paddle teleports to save ONE goal per activation!\n" +
+ " Cooldown: 9s base - 0.4s per level\n" +
+ "The eyes that see all futures!";
+ case "barrier": return "ABSORPTION SHIELD - Catch and release!\n" +
+ " Barrier CATCHES the ball completely\n" +
+ " Ball held for 1s, then you aim and release!\n" +
+ " Released ball has 2x speed + your chosen angle\n" +
+ " Can hold ball to stall (max 3s before auto-release)\n" +
+ " Cooldown: 8s base - 0.6s per level\n" +
+ "Control the battlefield!";
+ case "trap": return "EXPLOSIVE TRAP - Devastating shockwave!\n" +
+ " Ball EXPLODES on trap contact!\n" +
+ " STUNS opponent for 1.5 seconds!\n" +
+ " SHRINKS opponent paddle for 2.5 seconds!\n" +
+ " Ball ricochets at 2.5X SPEED in random direction!\n" +
+ " BIG 80px trap, lasts 10s (+1.5s per level)\n" +
+ " Cooldown: 3.5s base - 0.3s per level\n" +
+ "BOOM! Total devastation!";
+ case "screen_warp": return "TUNNEL VISION - Ball vanishes at edges!\n" +
+ " Ball becomes INVISIBLE when near screen edges\n" +
+ " Hidden zones: left edge, top/bottom walls\n" +
+ " Opponent must predict ball trajectory!\n" +
+ " Effect lasts 2s (+0.4s per level)\n" +
+ " Cooldown: 9s base - 0.6s per level\n" +
+ "They can't hit what they can't see!";
+ case "bankai": return "HOLLOW FORM - Inner demon awakens!\n" +
+ " Gain hollow mask - paddle turns WHITE with void aura\n" +
+ " Ball phases through opponent paddle ONCE\n" +
+ " After phase, ball returns to normal\n" +
+ " Move at 1.5x speed during Hollow Form\n" +
+ " Regenerate: ball hit extends duration by +0.5s\n" +
+ " Duration: 4s (+0.5s per level), Cooldown: 15s - 1s per level\n" +
+ "Let the hollow consume you!";
  default: return "Alternative version";
  }
  }
- 
+
  String getAbilityDescriptionWithBranch(String ability, int branch) {
  if (branch == 0) {
  return getAbilityDescription(ability);
@@ -1769,6 +2440,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  case "portal_pong": return baseName + " - Better portals + faster";
  case "power_siphon": return baseName + " - Copy random ability";
  case "time_loop": return baseName + " - Longer rewind + slow-mo";
+ case "haki": return baseName + " - Stun + phasing ball + power hits";
+ case "barrier": return baseName + " - 2x speed reflect + homing";
+ case "trap": return baseName + " - Ball slows to 30%";
+ case "screen_warp": return baseName + " - Flip their screen";
+ case "bankai": return baseName + " - Giant paddle + 2x speed";
  default: return baseName;
  }
  } else {
@@ -1790,11 +2466,16 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  case "portal_pong": return baseName + " - 3 chaotic portals";
  case "power_siphon": return baseName + " - Charge & explode!";
  case "time_loop": return baseName + " - Dual timeline balls";
+ case "haki": return baseName + " - Stun + slow opponent + auto-block";
+ case "barrier": return baseName + " - Catch ball + relaunch";
+ case "trap": return baseName + " - Explosive + 50% speed";
+ case "screen_warp": return baseName + " - 40% visible area";
+ case "bankai": return baseName + " - Ball phases through once";
  default: return baseName;
  }
  }
  }
- 
+
  int getNumberOfShadows(int player) {
  HashMap<String, Integer> abilities = (player == 1) ? player1Abilities : player2Abilities;
  HashMap<String, Integer> branches = (player == 1) ? player1AbilityBranches : player2AbilityBranches;
@@ -2159,7 +2840,189 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  g2d.setStroke(new BasicStroke(1));
  }
- 
+
+ // RENDER NEW ABILITIES
+
+ // BARRIER rendering
+ if (player1BarrierActive) {
+ int barrierBranch = player1AbilityBranches.getOrDefault("barrier", 0);
+ // Glow effect
+ g2d.setColor(new Color(0, 200, 255, 100));
+ g2d.fillRoundRect(player1BarrierX - 5, player1BarrierY - 5, barrierWidth + 10, barrierHeight + 10, 10, 10);
+ // Main barrier
+ if (barrierBranch == 1) {
+ g2d.setColor(new Color(200, 200, 255, 200)); // Mirror - silver
+ } else if (barrierBranch == 2) {
+ g2d.setColor(new Color(100, 255, 100, 200)); // Absorption - green
+ } else {
+ g2d.setColor(new Color(0, 150, 255, 200)); // Base - blue
+ }
+ g2d.fillRoundRect(player1BarrierX, player1BarrierY, barrierWidth, barrierHeight, 5, 5);
+ g2d.setColor(Color.WHITE);
+ g2d.drawRoundRect(player1BarrierX, player1BarrierY, barrierWidth, barrierHeight, 5, 5);
+ }
+ if (player2BarrierActive) {
+ int barrierBranch = player2AbilityBranches.getOrDefault("barrier", 0);
+ g2d.setColor(new Color(255, 100, 100, 100));
+ g2d.fillRoundRect(player2BarrierX - 5, player2BarrierY - 5, barrierWidth + 10, barrierHeight + 10, 10, 10);
+ if (barrierBranch == 1) {
+ g2d.setColor(new Color(255, 200, 200, 200));
+ } else if (barrierBranch == 2) {
+ g2d.setColor(new Color(255, 255, 100, 200));
+ } else {
+ g2d.setColor(new Color(255, 100, 100, 200));
+ }
+ g2d.fillRoundRect(player2BarrierX, player2BarrierY, barrierWidth, barrierHeight, 5, 5);
+ g2d.setColor(Color.WHITE);
+ g2d.drawRoundRect(player2BarrierX, player2BarrierY, barrierWidth, barrierHeight, 5, 5);
+ }
+
+ // TRAP rendering
+ if (player1TrapActive) {
+ int trapBranch = player1AbilityBranches.getOrDefault("trap", 0);
+ int pulseSize = (int)(5 * Math.sin(System.currentTimeMillis() / 200.0));
+ // Trap glow
+ g2d.setColor(new Color(255, 0, 255, 80));
+ g2d.fillOval(player1TrapX - trapSize/2 - 10 - pulseSize, player1TrapY - trapSize/2 - 10 - pulseSize,
+ trapSize + 20 + pulseSize*2, trapSize + 20 + pulseSize*2);
+ // Main trap
+ if (trapBranch == 1) {
+ g2d.setColor(new Color(0, 200, 0, 150)); // Sticky - green
+ } else if (trapBranch == 2) {
+ g2d.setColor(new Color(255, 100, 0, 150)); // Explosive - orange
+ } else {
+ g2d.setColor(new Color(200, 0, 200, 150)); // Base - purple
+ }
+ g2d.fillOval(player1TrapX - trapSize/2, player1TrapY - trapSize/2, trapSize, trapSize);
+ g2d.setColor(Color.WHITE);
+ g2d.setStroke(new BasicStroke(2));
+ g2d.drawOval(player1TrapX - trapSize/2, player1TrapY - trapSize/2, trapSize, trapSize);
+ g2d.setStroke(new BasicStroke(1));
+ }
+ if (player2TrapActive) {
+ int trapBranch = player2AbilityBranches.getOrDefault("trap", 0);
+ int pulseSize = (int)(5 * Math.sin(System.currentTimeMillis() / 200.0));
+ g2d.setColor(new Color(255, 255, 0, 80));
+ g2d.fillOval(player2TrapX - trapSize/2 - 10 - pulseSize, player2TrapY - trapSize/2 - 10 - pulseSize,
+ trapSize + 20 + pulseSize*2, trapSize + 20 + pulseSize*2);
+ if (trapBranch == 1) {
+ g2d.setColor(new Color(0, 255, 200, 150));
+ } else if (trapBranch == 2) {
+ g2d.setColor(new Color(255, 50, 50, 150));
+ } else {
+ g2d.setColor(new Color(255, 255, 0, 150));
+ }
+ g2d.fillOval(player2TrapX - trapSize/2, player2TrapY - trapSize/2, trapSize, trapSize);
+ g2d.setColor(Color.WHITE);
+ g2d.setStroke(new BasicStroke(2));
+ g2d.drawOval(player2TrapX - trapSize/2, player2TrapY - trapSize/2, trapSize, trapSize);
+ g2d.setStroke(new BasicStroke(1));
+ }
+
+ // HAKI ARMAMENT - Draw black aura around paddle
+ if (player1ArmamentActive) {
+ g2d.setColor(new Color(30, 0, 50, 150));
+ g2d.fillRoundRect(5, paddle1Y - 10, 25, paddle1Height + 20, 10, 10);
+ g2d.setColor(new Color(100, 0, 150));
+ g2d.setStroke(new BasicStroke(3));
+ g2d.drawRoundRect(5, paddle1Y - 5, 20, paddle1Height + 10, 5, 5);
+ g2d.setStroke(new BasicStroke(1));
+ }
+ if (player2ArmamentActive) {
+ g2d.setColor(new Color(30, 0, 50, 150));
+ g2d.fillRoundRect(570, paddle2Y - 10, 25, paddle2Height + 20, 10, 10);
+ g2d.setColor(new Color(100, 0, 150));
+ g2d.setStroke(new BasicStroke(3));
+ g2d.drawRoundRect(575, paddle2Y - 5, 20, paddle2Height + 10, 5, 5);
+ g2d.setStroke(new BasicStroke(1));
+ }
+
+ // HAKI OBSERVATION - Draw trajectory prediction lines
+ if (player1ObservationActive) {
+ g2d.setColor(new Color(255, 215, 0, 150)); // Gold
+ g2d.setStroke(new BasicStroke(2, BasicStroke.CAP_BUTT, BasicStroke.JOIN_BEVEL, 0, new float[]{5}, 0));
+ int predX = ballX, predY = ballY, predVelX = ballVelX, predVelY = ballVelY;
+ for (int i = 0; i < 50 && predX > 0 && predX < 600; i++) {
+ int nextX = predX + predVelX;
+ int nextY = predY + predVelY;
+ if (nextY < 0 || nextY > 400) predVelY = -predVelY;
+ g2d.drawLine(predX, predY, nextX, nextY);
+ predX = nextX;
+ predY = nextY;
+ }
+ g2d.setStroke(new BasicStroke(1));
+ }
+ if (player2ObservationActive) {
+ g2d.setColor(new Color(255, 100, 100, 150));
+ g2d.setStroke(new BasicStroke(2, BasicStroke.CAP_BUTT, BasicStroke.JOIN_BEVEL, 0, new float[]{5}, 0));
+ int predX = ballX, predY = ballY, predVelX = ballVelX, predVelY = ballVelY;
+ for (int i = 0; i < 50 && predX > 0 && predX < 600; i++) {
+ int nextX = predX + predVelX;
+ int nextY = predY + predVelY;
+ if (nextY < 0 || nextY > 400) predVelY = -predVelY;
+ g2d.drawLine(predX, predY, nextX, nextY);
+ predX = nextX;
+ predY = nextY;
+ }
+ g2d.setStroke(new BasicStroke(1));
+ }
+
+ // BANKAI - Zangetsu effect (large black aura)
+ if (player1ZangetsuActive) {
+ // Black energy aura
+ g2d.setColor(new Color(0, 0, 0, 100));
+ g2d.fillRoundRect(0, paddle1Y - 30, 60, paddle1Height + 60, 20, 20);
+ g2d.setColor(new Color(255, 50, 0, 200)); // Red energy
+ g2d.setStroke(new BasicStroke(3));
+ g2d.drawRoundRect(5, paddle1Y - 25, 50, paddle1Height + 50, 15, 15);
+ g2d.setStroke(new BasicStroke(1));
+ g2d.setColor(Color.WHITE);
+ g2d.setFont(new Font("Arial", Font.BOLD, 10));
+ g2d.drawString("BANKAI", 5, paddle1Y - 30);
+ }
+ if (player2ZangetsuActive) {
+ g2d.setColor(new Color(0, 0, 0, 100));
+ g2d.fillRoundRect(540, paddle2Y - 30, 60, paddle2Height + 60, 20, 20);
+ g2d.setColor(new Color(255, 50, 0, 200));
+ g2d.setStroke(new BasicStroke(3));
+ g2d.drawRoundRect(545, paddle2Y - 25, 50, paddle2Height + 50, 15, 15);
+ g2d.setStroke(new BasicStroke(1));
+ g2d.setColor(Color.WHITE);
+ g2d.setFont(new Font("Arial", Font.BOLD, 10));
+ g2d.drawString("BANKAI", 545, paddle2Y - 30);
+ }
+
+ // BANKAI - Hollow Form effect (white ethereal aura)
+ if (player1HollowActive) {
+ g2d.setColor(new Color(255, 255, 255, 80));
+ g2d.fillRoundRect(0, paddle1Y - 15, 40, paddle1Height + 30, 15, 15);
+ g2d.setColor(new Color(200, 200, 255, 200));
+ g2d.setStroke(new BasicStroke(2));
+ g2d.drawRoundRect(5, paddle1Y - 10, 30, paddle1Height + 20, 10, 10);
+ g2d.setStroke(new BasicStroke(1));
+ if (!player1HollowPhased) {
+ g2d.setColor(Color.CYAN);
+ g2d.setFont(new Font("Arial", Font.BOLD, 8));
+ g2d.drawString("HOLLOW", 2, paddle1Y - 15);
+ }
+ }
+ if (player2HollowActive) {
+ g2d.setColor(new Color(255, 255, 255, 80));
+ g2d.fillRoundRect(560, paddle2Y - 15, 40, paddle2Height + 30, 15, 15);
+ g2d.setColor(new Color(255, 200, 200, 200));
+ g2d.setStroke(new BasicStroke(2));
+ g2d.drawRoundRect(565, paddle2Y - 10, 30, paddle2Height + 20, 10, 10);
+ g2d.setStroke(new BasicStroke(1));
+ if (!player2HollowPhased) {
+ g2d.setColor(Color.CYAN);
+ g2d.setFont(new Font("Arial", Font.BOLD, 8));
+ g2d.drawString("HOLLOW", 562, paddle2Y - 15);
+ }
+ }
+
+ // SCREEN WARP effects - applied at the end as overlays
+ // (These effects will be drawn later after all other rendering)
+
  // Gravity Hammer active visual
  if (player1HammerActive && player1HammerDuration > 0) {
  g2d.setColor(new Color(255, 200, 0, 100));
@@ -2208,6 +3071,28 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  
  // Draw paddle 1 (completely invisible if player 1 is blinded)
  if (player1BlindEffectTimer == 0) {
+ // BANKAI MODE - BLACK PADDLE WITH DARK AURA!
+ if (player1BankaiActive) {
+ // Dark aura
+ g2d.setColor(new Color(50, 0, 80, 150));
+ g2d.fillRoundRect(3, paddle1Y - 8, 24, paddle1Height + 16, 12, 12);
+ // Black paddle with red edge
+ GradientPaint bankaiGradient = new GradientPaint(10, paddle1Y, new Color(20, 0, 30), 20, paddle1Y, Color.BLACK);
+ g2d.setPaint(bankaiGradient);
+ g2d.fillRoundRect(10, paddle1Y, 10, paddle1Height, 5, 5);
+ g2d.setColor(new Color(150, 0, 0));
+ g2d.drawRoundRect(10, paddle1Y, 10, paddle1Height, 5, 5);
+ // "BANKAI" text
+ g2d.setFont(new Font("Arial", Font.BOLD, 10));
+ g2d.setColor(new Color(150, 0, 0));
+ g2d.drawString("BAN", 3, paddle1Y - 12);
+ g2d.drawString("KAI", 5, paddle1Y - 2);
+ // Stack count
+ if (player1BankaiStacks > 0) {
+ g2d.setColor(Color.RED);
+ g2d.drawString("x" + player1BankaiStacks, 8, paddle1Y + paddle1Height + 12);
+ }
+ } else {
  // Elastic Expansion glow
  if (elastic1Active) {
  g2d.setColor(new Color(0, 255, 100, 100));
@@ -2219,10 +3104,32 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  g2d.setPaint(paddle1Gradient);
  g2d.fillRoundRect(10, paddle1Y, 10, paddle1Height, 5, 5);
  }
+ }
  // When blinded: paddle is COMPLETELY INVISIBLE (no outline, nothing)
 
  // Draw paddle 2 (completely invisible if player 2 is blinded)
  if (player2BlindEffectTimer == 0) {
+ // BANKAI MODE - BLACK PADDLE WITH DARK AURA!
+ if (player2BankaiActive) {
+ // Dark aura
+ g2d.setColor(new Color(50, 0, 80, 150));
+ g2d.fillRoundRect(573, paddle2Y - 8, 24, paddle2Height + 16, 12, 12);
+ // Black paddle with red edge
+ GradientPaint bankaiGradient = new GradientPaint(580, paddle2Y, new Color(20, 0, 30), 590, paddle2Y, Color.BLACK);
+ g2d.setPaint(bankaiGradient);
+ g2d.fillRoundRect(580, paddle2Y, 10, paddle2Height, 5, 5);
+ g2d.setColor(new Color(150, 0, 0));
+ g2d.drawRoundRect(580, paddle2Y, 10, paddle2Height, 5, 5);
+ // "BANKAI" text
+ g2d.setFont(new Font("Arial", Font.BOLD, 10));
+ g2d.setColor(new Color(150, 0, 0));
+ g2d.drawString("BAN", 573, paddle2Y - 12);
+ g2d.drawString("KAI", 575, paddle2Y - 2);
+ if (player2BankaiStacks > 0) {
+ g2d.setColor(Color.RED);
+ g2d.drawString("x" + player2BankaiStacks, 578, paddle2Y + paddle2Height + 12);
+ }
+ } else {
  // Elastic Expansion glow
  if (elastic2Active) {
  g2d.setColor(new Color(255, 100, 0, 100));
@@ -2233,6 +3140,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  GradientPaint paddle2Gradient = new GradientPaint(580, paddle2Y, new Color(255, 100, 100), 590, paddle2Y, new Color(200, 50, 50));
  g2d.setPaint(paddle2Gradient);
  g2d.fillRoundRect(580, paddle2Y, 10, paddle2Height, 5, 5);
+ }
  }
  // When blinded: paddle is COMPLETELY INVISIBLE (no outline, nothing)
 
@@ -2405,16 +3313,56 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  ballOuter = new Color(100, 100, 200);
  }
  
+ // TUNNEL VISION - Check if ball should be hidden
+ boolean ballHiddenByTunnel = false;
+ // Player 1's tunnel vision - ball hidden when in player 1's blind zones (left side edges)
+ if (player1TunnelTimer > 0) {
+ if (ballX < 100 || ballY < 80 || ballY > 320) {
+ ballHiddenByTunnel = true;
+ }
+ }
+ // Player 2's tunnel vision - ball hidden when in player 2's blind zones (right side edges)
+ if (player2TunnelTimer > 0) {
+ if (ballX > 500 || ballY < 80 || ballY > 320) {
+ ballHiddenByTunnel = true;
+ }
+ }
+
+ if (!ballHiddenByTunnel) {
  RadialGradientPaint ballGradient = new RadialGradientPaint(ballX + 7, ballY + 7, 10, new float[]{0.0f, 0.6f, 1.0f}, new Color[]{ballCenter, ballMid, ballOuter});
  g2d.setPaint(ballGradient);
  g2d.fillOval(ballX, ballY, 15, 15);
 
+ // ARMAMENT HAKI - Draw dark aura around ball when phase is active
+ if (player1HakiPhaseActive || player2HakiPhaseActive) {
+ g2d.setColor(new Color(60, 0, 80, 120));
+ g2d.fillOval(ballX - 5, ballY - 5, 25, 25);
+ g2d.setColor(new Color(130, 0, 200, 180));
+ g2d.setStroke(new BasicStroke(2));
+ g2d.drawOval(ballX - 3, ballY - 3, 21, 21);
+ g2d.setStroke(new BasicStroke(1));
+ }
+ }
+
+ // STORY MODE HEADER
+ if (storyModeActive) {
+ g2d.setFont(new Font("Arial", Font.BOLD, 14));
+ g2d.setColor(new Color(255, 215, 0)); // Gold color
+ String bossName = storyBossNames[storyModeLevel - 1];
+ int scoreNeeded = storyLevelScoreToWin[storyModeLevel - 1];
+ g2d.drawString("STORY MODE - LEVEL " + storyModeLevel, 230, 15);
+ g2d.setColor(new Color(255, 100, 100));
+ g2d.drawString("VS " + bossName, 255, 30);
+ g2d.setColor(Color.WHITE);
+ g2d.drawString("First to " + scoreNeeded + " wins!", 250, 45);
+ }
+
  // Draw score
  g2d.setFont(new Font("Arial", Font.BOLD, 48));
  g2d.setColor(new Color(0, 255, 255));
- g2d.drawString(String.valueOf(scorePlayer1), 245, 55);
+ g2d.drawString(String.valueOf(scorePlayer1), 245, storyModeActive ? 75 : 55);
  g2d.setColor(new Color(255, 100, 100));
- g2d.drawString(String.valueOf(scorePlayer2), 325, 55);
+ g2d.drawString(String.valueOf(scorePlayer2), 325, storyModeActive ? 75 : 55);
 
  // Draw levels
  g2d.setFont(new Font("Arial", Font.BOLD, 14));
@@ -2573,6 +3521,35 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  else if (player1JaisanTimer >= jaisanCooldown) displayText += " ";
  else displayText += " (" + ((jaisanCooldown - player1JaisanTimer) / 10) + ")";
  }
+ // NEW ABILITIES - Haki, Barrier, Trap, Screen Warp, Bankai
+ if (ability.equals("haki")) {
+ int hakiBr = player1AbilityBranches.getOrDefault("haki", 0);
+ int hakiLv = getEffectiveAbilityLevel(1, "haki");
+ int p1HakiCD = (hakiBr == 1) ? hakiArmamentCooldown - (Math.max(0, hakiLv - 2) * 30) :
+                (hakiBr == 2) ? hakiObservationCooldown - (Math.max(0, hakiLv - 2) * 40) :
+                hakiBaseCooldown;
+ if (player1HakiTimer >= p1HakiCD) displayText += " ";
+ else displayText += " (" + ((p1HakiCD - player1HakiTimer) / 10) + ")";
+ }
+ if (ability.equals("barrier")) {
+ if (player1BarrierActive) displayText += " [ACTIVE]";
+ else if (player1BarrierTimer >= barrierCooldown) displayText += " ";
+ else displayText += " (" + ((barrierCooldown - player1BarrierTimer) / 10) + ")";
+ }
+ if (ability.equals("trap")) {
+ if (player1TrapActive) displayText += " [SET]";
+ else if (player1TrapTimer >= trapCooldown) displayText += " ";
+ else displayText += " (" + ((trapCooldown - player1TrapTimer) / 10) + ")";
+ }
+ if (ability.equals("screen_warp")) {
+ if (player1WarpTimer >= warpCooldown) displayText += " ";
+ else displayText += " (" + ((warpCooldown - player1WarpTimer) / 10) + ")";
+ }
+ if (ability.equals("bankai")) {
+ if (player1BankaiActive) displayText += " [BANKAI!] x" + player1BankaiStacks;
+ else if (player1BankaiTimer >= bankaiCooldown) displayText += " ";
+ else displayText += " (" + ((bankaiCooldown - player1BankaiTimer) / 10) + ")";
+ }
  g2d.drawString(displayText, 10, abilityY);
  abilityY += 11;
  }
@@ -2670,6 +3647,35 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  else if (player2JaisanTimer >= jaisanCooldown) displayText += " ";
  else displayText += " (" + ((jaisanCooldown - player2JaisanTimer) / 10) + ")";
  }
+ // NEW ABILITIES - Haki, Barrier, Trap, Screen Warp, Bankai
+ if (ability.equals("haki")) {
+ int hakiBr2 = player2AbilityBranches.getOrDefault("haki", 0);
+ int hakiLv2 = getEffectiveAbilityLevel(2, "haki");
+ int p2HakiCD = (hakiBr2 == 1) ? hakiArmamentCooldown - (Math.max(0, hakiLv2 - 2) * 30) :
+                (hakiBr2 == 2) ? hakiObservationCooldown - (Math.max(0, hakiLv2 - 2) * 40) :
+                hakiBaseCooldown;
+ if (player2HakiTimer >= p2HakiCD) displayText += " ";
+ else displayText += " (" + ((p2HakiCD - player2HakiTimer) / 10) + ")";
+ }
+ if (ability.equals("barrier")) {
+ if (player2BarrierActive) displayText += " [ACTIVE]";
+ else if (player2BarrierTimer >= barrierCooldown) displayText += " ";
+ else displayText += " (" + ((barrierCooldown - player2BarrierTimer) / 10) + ")";
+ }
+ if (ability.equals("trap")) {
+ if (player2TrapActive) displayText += " [SET]";
+ else if (player2TrapTimer >= trapCooldown) displayText += " ";
+ else displayText += " (" + ((trapCooldown - player2TrapTimer) / 10) + ")";
+ }
+ if (ability.equals("screen_warp")) {
+ if (player2WarpTimer >= warpCooldown) displayText += " ";
+ else displayText += " (" + ((warpCooldown - player2WarpTimer) / 10) + ")";
+ }
+ if (ability.equals("bankai")) {
+ if (player2BankaiActive) displayText += " [BANKAI!] x" + player2BankaiStacks;
+ else if (player2BankaiTimer >= bankaiCooldown) displayText += " ";
+ else displayText += " (" + ((bankaiCooldown - player2BankaiTimer) / 10) + ")";
+ }
  int width = g2d.getFontMetrics().stringWidth(displayText);
  g2d.drawString(displayText, 580 - width, abilityY);
  abilityY += 11;
@@ -2685,7 +3691,87 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  g2d.setColor(Color.WHITE);
  g2d.fillOval(bullet.x - 2, bullet.y - 2, 4, 4);
  }
- 
+
+ // Draw ZANGETSU SWORD SWING animation
+ if (player1SwordSwingTimer > 0) {
+ int swingProgress = swordSwingDuration - player1SwordSwingTimer;
+ double swingAngle = -Math.PI/4 + (swingProgress / (double)swordSwingDuration) * Math.PI/2;
+ int swordLength = 80;
+ int startX = 25;
+ int startY = paddle1Y + paddle1Height / 2;
+ int endX = startX + (int)(Math.cos(swingAngle) * swordLength);
+ int endY = startY + (int)(Math.sin(swingAngle) * swordLength);
+
+ // Sword trail effect
+ g2d.setStroke(new BasicStroke(8));
+ g2d.setColor(new Color(50, 0, 80, 150));
+ g2d.drawLine(startX, startY, endX, endY);
+ g2d.setStroke(new BasicStroke(4));
+ g2d.setColor(new Color(0, 0, 0));
+ g2d.drawLine(startX, startY, endX, endY);
+ g2d.setStroke(new BasicStroke(2));
+ g2d.setColor(new Color(150, 0, 0));
+ g2d.drawLine(startX, startY, endX, endY);
+ g2d.setStroke(new BasicStroke(1));
+
+ // "ZANGETSU!" text
+ g2d.setFont(new Font("Arial", Font.BOLD, 16));
+ g2d.setColor(new Color(150, 0, 0));
+ g2d.drawString("ZANGETSU!", 30, paddle1Y - 20);
+ }
+ if (player2SwordSwingTimer > 0) {
+ int swingProgress = swordSwingDuration - player2SwordSwingTimer;
+ double swingAngle = Math.PI - (-Math.PI/4 + (swingProgress / (double)swordSwingDuration) * Math.PI/2);
+ int swordLength = 80;
+ int startX = 575;
+ int startY = paddle2Y + paddle2Height / 2;
+ int endX = startX + (int)(Math.cos(swingAngle) * swordLength);
+ int endY = startY + (int)(Math.sin(swingAngle) * swordLength);
+
+ g2d.setStroke(new BasicStroke(8));
+ g2d.setColor(new Color(50, 0, 80, 150));
+ g2d.drawLine(startX, startY, endX, endY);
+ g2d.setStroke(new BasicStroke(4));
+ g2d.setColor(new Color(0, 0, 0));
+ g2d.drawLine(startX, startY, endX, endY);
+ g2d.setStroke(new BasicStroke(2));
+ g2d.setColor(new Color(150, 0, 0));
+ g2d.drawLine(startX, startY, endX, endY);
+ g2d.setStroke(new BasicStroke(1));
+
+ g2d.setFont(new Font("Arial", Font.BOLD, 16));
+ g2d.setColor(new Color(150, 0, 0));
+ g2d.drawString("ZANGETSU!", 480, paddle2Y - 20);
+ }
+
+ // Draw GETSUGA TENSHO projectiles
+ for (GetsugaTensho gt : getsugaProjectiles) {
+ int pulseSize = (int)(5 * Math.sin(System.currentTimeMillis() / 50.0));
+
+ // Outer dark aura
+ g2d.setColor(new Color(30, 0, 50, 150));
+ g2d.fillOval(gt.x - gt.width/2 - 10 - pulseSize, gt.y - gt.height/2 - 10 - pulseSize,
+ gt.width + 20 + pulseSize*2, gt.height + 20 + pulseSize*2);
+
+ // Main crescent shape (black with red edge)
+ int[] xPoints = {gt.x - gt.width/2, gt.x, gt.x + gt.width/2, gt.x};
+ int[] yPoints = {gt.y, gt.y - gt.height/2, gt.y, gt.y + gt.height/2};
+ g2d.setColor(Color.BLACK);
+ g2d.fillPolygon(xPoints, yPoints, 4);
+ g2d.setColor(new Color(150, 0, 0));
+ g2d.setStroke(new BasicStroke(3));
+ g2d.drawPolygon(xPoints, yPoints, 4);
+ g2d.setStroke(new BasicStroke(1));
+
+ // "GETSUGA TENSHO!" text for evolved version
+ if (gt.isEvolved) {
+ g2d.setFont(new Font("Arial", Font.BOLD, 12));
+ g2d.setColor(new Color(255, 50, 50));
+ g2d.drawString("GETSUGA", gt.x - 25, gt.y - gt.height/2 - 15);
+ g2d.drawString("TENSHO!", gt.x - 25, gt.y - gt.height/2 - 3);
+ }
+ }
+
  // Draw Vegeta bullets (Vegeta branch - Big Bang Attack)
  for (VegetaBullet vb : vegetaBullets) {
  // Purple/yellow energy sphere with pulsing effect
@@ -3409,8 +4495,66 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  g2d.drawString("Press L to enable Learning AI", 10, 15);
  }
  }
+
+ // SCREEN WARP OVERLAY EFFECTS
+
+ // Screen Inversion effect (flip screen vertically for affected player)
+ // Note: In a real implementation, we'd use AffineTransform to flip
+ // For simplicity, we'll draw a visual indicator
+ if (player1InversionTimer > 0) {
+ g2d.setColor(new Color(255, 0, 255, 100));
+ g2d.fillRect(0, 0, 300, 400);
+ g2d.setColor(Color.WHITE);
+ g2d.setFont(new Font("Arial", Font.BOLD, 20));
+ g2d.drawString("INVERTED!", 100, 200);
  }
- 
+ if (player2InversionTimer > 0) {
+ g2d.setColor(new Color(0, 255, 255, 100));
+ g2d.fillRect(300, 0, 300, 400);
+ g2d.setColor(Color.WHITE);
+ g2d.setFont(new Font("Arial", Font.BOLD, 20));
+ g2d.drawString("INVERTED!", 400, 200);
+ }
+
+ // Tunnel Vision effect (darken edges)
+ if (player1TunnelTimer > 0) {
+ // Darken the edges of player 1's view
+ g2d.setColor(new Color(0, 0, 0, 200));
+ g2d.fillRect(0, 0, 100, 400); // Left edge
+ g2d.fillRect(0, 0, 300, 80); // Top edge
+ g2d.fillRect(0, 320, 300, 80); // Bottom edge
+ g2d.setColor(Color.YELLOW);
+ g2d.setFont(new Font("Arial", Font.BOLD, 12));
+ g2d.drawString("TUNNEL VISION!", 100, 200);
+ }
+ if (player2TunnelTimer > 0) {
+ g2d.setColor(new Color(0, 0, 0, 200));
+ g2d.fillRect(500, 0, 100, 400); // Right edge
+ g2d.fillRect(300, 0, 300, 80); // Top edge
+ g2d.fillRect(300, 320, 300, 80); // Bottom edge
+ g2d.setColor(Color.YELLOW);
+ g2d.setFont(new Font("Arial", Font.BOLD, 12));
+ g2d.drawString("TUNNEL VISION!", 400, 200);
+ }
+
+ // Base screen warp distortion effect
+ if (player1WarpEffectTimer > 0) {
+ // Wavy distortion overlay for player 1
+ g2d.setColor(new Color(100, 0, 200, 80));
+ for (int i = 0; i < 10; i++) {
+ int offset = (int)(10 * Math.sin(System.currentTimeMillis() / 100.0 + i));
+ g2d.fillRect(0, i * 40 + offset, 300, 20);
+ }
+ }
+ if (player2WarpEffectTimer > 0) {
+ g2d.setColor(new Color(200, 0, 100, 80));
+ for (int i = 0; i < 10; i++) {
+ int offset = (int)(10 * Math.sin(System.currentTimeMillis() / 100.0 + i));
+ g2d.fillRect(300, i * 40 + offset, 300, 20);
+ }
+ }
+ }
+
  void drawLegendItem(Graphics2D g2d, int x, int y, Color color, String text, boolean isMapMod) {
  RadialGradientPaint gradient = new RadialGradientPaint(x + 5, y - 5, 7, new float[]{0.0f, 1.0f}, new Color[]{color, new Color(color.getRed()/2, color.getGreen()/2, color.getBlue()/2)});
  g2d.setPaint(gradient);
@@ -4579,7 +5723,9 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  
  // Paddle movement (only if not stunned AND not frozen)
  if (player1StunTimer == 0 && player2FreezeActive == 0) {
- boolean reversedControls = player1ReverseEffectTimer > 0;
+ // SCREEN WARP effects - reverses/messes with controls
+ boolean warpReversed = player1WarpEffectTimer > 0 || player1InversionTimer > 0;
+ boolean reversedControls = player1ReverseEffectTimer > 0 || warpReversed;
  
  // Puppet Master - opponent controls paddle
  if (player1PuppetEffectTimer > 0) {
@@ -4608,7 +5754,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int slowLevel = player2Abilities.get("slow_opponent") - 2;
  moveSpeed = Math.max(1, moveSpeed / 3 - slowLevel);
  }
- 
+ // Observation Haki - opponent (player 2) slows player 1's paddle
+ if (player2ObservationActive) {
+ moveSpeed = Math.max(1, (int)(moveSpeed * player1ObsSlowFactor));
+ }
+
  // Chaos Engine debuff effects
  if (player1ChaosEffectTimer > 0) {
  if (player1CurrentDebuff == 1) {
@@ -4638,9 +5788,15 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  paddle1Y = Math.max(0, paddle1Y - moveSpeed / 2); // Slide opposite direction
  }
  }
+
+ // SCREEN WARP - Inversion causes random jitter
+ if (player1InversionTimer > 0) {
+ int jitter = (int)(Math.random() * 20) - 10; // Random -10 to +10
+ paddle1Y = Math.max(0, Math.min(paddle1MaxY, paddle1Y + jitter));
  }
  }
- 
+ }
+
  // Sonic Dash (speed_boost branch 1) - INSTANT dash to ball on Q press
  if (getEffectiveAbilityLevel(1, "speed_boost") >= 3 && player1AbilityBranches.getOrDefault("speed_boost", 0) == 1) {
  player1DashTimer++;
@@ -4796,8 +5952,10 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Get learned AI movement
  int learnedMovement = getLearnedAIMovement(paddle2CenterY, targetY, aiSpeed);
  
- boolean reversedControls = player2ReverseEffectTimer > 0;
- 
+ // SCREEN WARP effects on AI
+ boolean warpReversed = player2WarpEffectTimer > 0 || player2InversionTimer > 0;
+ boolean reversedControls = player2ReverseEffectTimer > 0 || warpReversed;
+
  if (learnedMovement != 0) {
  // Apply learned movement
  if (reversedControls) learnedMovement = -learnedMovement;
@@ -4932,8 +6090,10 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  
  // Move toward target with large dead zone (realistic human positioning)
- boolean reversedControls = player2ReverseEffectTimer > 0;
- 
+ // SCREEN WARP effects on AI
+ boolean warpReversed = player2WarpEffectTimer > 0 || player2InversionTimer > 0;
+ boolean reversedControls = player2ReverseEffectTimer > 0 || warpReversed;
+
  if (targetY < paddle2CenterY - deadZone) {
  // Need to move up
  if (reversedControls) {
@@ -4959,6 +6119,38 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  // else: within dead zone, don't move (humans don't micro-adjust constantly)
  } // End of Learning AI / Normal AI block
+
+ // AI ABILITY ACTIVATION - simulate pressing ability key
+ // AI uses abilities strategically based on game state
+ boolean aiShouldUseAbility = false;
+ double aiUseChance = 0.02; // Base 2% chance per frame (~every 50 frames / 0.5s)
+
+ if (aiDifficulty >= 2) aiUseChance = 0.03; // Hard: more frequent
+ if (aiDifficulty >= 3) aiUseChance = 0.05; // Impossible: very frequent
+ if (aiDifficulty >= 4) aiUseChance = 0.04; // Learning: moderate
+
+ // Increase chance when ball is coming toward AI
+ if (ballVelX > 0) {
+ aiUseChance *= 2.0; // Double chance when ball approaching
+ if (ballX > 400) aiUseChance *= 1.5; // Even more when ball is close
+ }
+
+ // Use abilities more aggressively when behind
+ if (scorePlayer1 > scorePlayer2 + 2) {
+ aiUseChance *= 1.5;
+ }
+
+ if (Math.random() < aiUseChance) {
+ aiShouldUseAbility = true;
+ }
+
+ if (aiShouldUseAbility) {
+ // Simulate pressing player2AbilityKey via keyPressed
+ KeyEvent fakeKey = new KeyEvent(this, KeyEvent.KEY_PRESSED,
+ System.currentTimeMillis(), 0, player2AbilityKey, KeyEvent.CHAR_UNDEFINED);
+ keyPressed(fakeKey);
+ }
+
  } else {
  // Two-player mode for player 2
  // Puppet Master - opponent controls paddle
@@ -4982,15 +6174,21 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  } else {
  // Normal movement (or with debuffs)
- boolean reversedControls = player2ReverseEffectTimer > 0;
- 
+ // SCREEN WARP effects - reverses/messes with controls
+ boolean warpReversed = player2WarpEffectTimer > 0 || player2InversionTimer > 0;
+ boolean reversedControls = player2ReverseEffectTimer > 0 || warpReversed;
+
  // Gravity Well (slow_opponent branch 2) - makes movement slower
  int moveSpeed = (int)getPlayerSpeed(2);
  if (getEffectiveAbilityLevel(1, "slow_opponent") >= 3 && player1AbilityBranches.getOrDefault("slow_opponent", 0) == 2) {
  int slowLevel = player1Abilities.get("slow_opponent") - 2;
  moveSpeed = Math.max(1, moveSpeed / 3 - slowLevel);
  }
- 
+ // Observation Haki - opponent (player 1) slows player 2's paddle
+ if (player1ObservationActive) {
+ moveSpeed = Math.max(1, (int)(moveSpeed * player2ObsSlowFactor));
+ }
+
  // Chaos Engine debuff effects
  if (player2ChaosEffectTimer > 0) {
  if (player2CurrentDebuff == 1) {
@@ -5019,10 +6217,16 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  paddle2Y = Math.max(0, paddle2Y - moveSpeed / 2);
  }
  }
+
+ // SCREEN WARP - Inversion causes random jitter
+ if (player2InversionTimer > 0) {
+ int jitter = (int)(Math.random() * 20) - 10; // Random -10 to +10
+ paddle2Y = Math.max(0, Math.min(paddle2MaxY, paddle2Y + jitter));
  }
  }
  }
- 
+ }
+
  // Lag effect - teleport paddle randomly
  if (player2LagEffectTimer > 0) {
  player2LagTeleportTimer++;
@@ -5597,7 +6801,163 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Update time loop slow motion timers
  if (player1TimeLoopSlowMoTimer > 0) player1TimeLoopSlowMoTimer--;
  if (player2TimeLoopSlowMoTimer > 0) player2TimeLoopSlowMoTimer--;
- 
+
+ // NEW ABILITY TIMER UPDATES
+
+ // Haki timers
+ player1HakiTimer++;
+ player2HakiTimer++;
+ if (player1ArmamentActive && player1ArmamentDuration > 0) {
+ player1ArmamentDuration--;
+ if (player1ArmamentDuration == 0) {
+ player1ArmamentActive = false;
+ player1HakiPhaseActive = false; // Clear phasing when armament ends
+ }
+ }
+ if (player2ArmamentActive && player2ArmamentDuration > 0) {
+ player2ArmamentDuration--;
+ if (player2ArmamentDuration == 0) {
+ player2ArmamentActive = false;
+ player2HakiPhaseActive = false; // Clear phasing when armament ends
+ }
+ }
+ if (player1ObservationActive && player1ObservationDuration > 0) {
+ player1ObservationDuration--;
+ if (player1ObservationDuration == 0) {
+ player1ObservationActive = false;
+ player2ObsSlowFactor = 1.0; // Reset opponent slow
+ }
+ }
+ if (player2ObservationActive && player2ObservationDuration > 0) {
+ player2ObservationDuration--;
+ if (player2ObservationDuration == 0) {
+ player2ObservationActive = false;
+ player1ObsSlowFactor = 1.0; // Reset opponent slow
+ }
+ }
+
+ // Barrier timers
+ player1BarrierTimer++;
+ player2BarrierTimer++;
+ if (player1BarrierActive && player1BarrierDuration > 0) {
+ player1BarrierDuration--;
+ if (player1BarrierDuration == 0) player1BarrierActive = false;
+ }
+ if (player2BarrierActive && player2BarrierDuration > 0) {
+ player2BarrierDuration--;
+ if (player2BarrierDuration == 0) player2BarrierActive = false;
+ }
+
+ // Trap timers
+ player1TrapTimer++;
+ player2TrapTimer++;
+ if (player1TrapActive && player1TrapDuration > 0) {
+ player1TrapDuration--;
+ if (player1TrapDuration == 0) player1TrapActive = false;
+ }
+ if (player2TrapActive && player2TrapDuration > 0) {
+ player2TrapDuration--;
+ if (player2TrapDuration == 0) player2TrapActive = false;
+ }
+ // Sticky effect timers
+ if (player1StickyTimer > 0) player1StickyTimer--;
+ if (player2StickyTimer > 0) player2StickyTimer--;
+
+ // Screen Warp timers
+ player1WarpTimer++;
+ player2WarpTimer++;
+ if (player1WarpEffectTimer > 0) player1WarpEffectTimer--;
+ if (player2WarpEffectTimer > 0) player2WarpEffectTimer--;
+ if (player1InversionTimer > 0) player1InversionTimer--;
+ if (player2InversionTimer > 0) player2InversionTimer--;
+ if (player1TunnelTimer > 0) player1TunnelTimer--;
+ if (player2TunnelTimer > 0) player2TunnelTimer--;
+
+ // Bankai timers
+ player1BankaiTimer++;
+ player2BankaiTimer++;
+ if (player1BankaiActive && player1BankaiDuration > 0) {
+ player1BankaiDuration--;
+ if (player1BankaiDuration == 0) {
+ player1BankaiActive = false;
+ player1ZangetsuActive = false;
+ player1HollowActive = false;
+ }
+ }
+ if (player2BankaiActive && player2BankaiDuration > 0) {
+ player2BankaiDuration--;
+ if (player2BankaiDuration == 0) {
+ player2BankaiActive = false;
+ player2ZangetsuActive = false;
+ player2HollowActive = false;
+ }
+ }
+
+ // Sword swing timers
+ if (player1SwordSwingTimer > 0) player1SwordSwingTimer--;
+ if (player2SwordSwingTimer > 0) player2SwordSwingTimer--;
+ if (player1SwordSwingCooldown > 0) player1SwordSwingCooldown--;
+ if (player2SwordSwingCooldown > 0) player2SwordSwingCooldown--;
+
+ // GETSUGA TENSHO projectile movement and collision
+ for (int i = getsugaProjectiles.size() - 1; i >= 0; i--) {
+ GetsugaTensho gt = getsugaProjectiles.get(i);
+ gt.x += gt.velocityX;
+
+ // Remove if off screen
+ if (gt.x < -100 || gt.x > 700) {
+ getsugaProjectiles.remove(i);
+ continue;
+ }
+
+ // Collision with opponent paddle
+ int targetPaddleY = (gt.owner == 1) ? paddle2Y : paddle1Y;
+ int targetPaddleX = (gt.owner == 1) ? 575 : 5;
+ int targetPaddleHeight = getPaddleHeight(gt.owner == 1 ? 2 : 1, shrinkPaddlesActive);
+ Rectangle getsugaRect = new Rectangle(gt.x - gt.width/2, gt.y - gt.height/2, gt.width, gt.height);
+ Rectangle paddleRect = new Rectangle(targetPaddleX, targetPaddleY, 10, targetPaddleHeight);
+
+ if (getsugaRect.intersects(paddleRect)) {
+ // HIT! Stun opponent and shrink their paddle!
+ if (gt.owner == 1) {
+ if (player2StunImmunityTimer == 0) player2StunTimer = 150; // 1.5s stun
+ player2ShrinkEffectTimer = 300; // 3s shrink
+ if (gt.isEvolved) {
+ // Evolved Getsuga: Also reverse controls and steal a point!
+ player2ReverseEffectTimer = 200;
+ if (scorePlayer2 > 0) { scorePlayer2--; scorePlayer1++; }
+ }
+ } else {
+ if (player1StunImmunityTimer == 0) player1StunTimer = 150;
+ player1ShrinkEffectTimer = 300;
+ if (gt.isEvolved) {
+ player1ReverseEffectTimer = 200;
+ if (scorePlayer1 > 0) { scorePlayer1--; scorePlayer2++; }
+ }
+ }
+ getsugaProjectiles.remove(i);
+ }
+ }
+
+ // No-score timer (for 2-minute upgrade feature)
+ noScoreTimer++;
+
+ // Ball not hit timer - reset ball if not hit by any player for 10 seconds
+ if (!ballFrozenByTrap) { // Don't count while ball is frozen
+ ballNotHitTimer++;
+ if (ballNotHitTimer >= ballResetThreshold) {
+ // Reset ball to center
+ ballX = 295;
+ ballY = 200;
+ ballSpeed = 5.0;
+ // Random direction
+ ballVelX = (Math.random() > 0.5) ? 3 : -3;
+ ballVelY = (int)(Math.random() * 4) - 2;
+ if (ballVelY == 0) ballVelY = 1;
+ ballNotHitTimer = 0;
+ }
+ }
+
  // Ball movement
  int adjustedVelX = (int)(ballVelX * ballSpeedMultiplier);
  int adjustedVelY = (int)(ballVelY * ballSpeedMultiplier);
@@ -5608,6 +6968,14 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  adjustedVelY = adjustedVelY / 3;
  }
  
+ // Observation Haki - ball at 60% speed (NOT modifying ballVelX/Y directly)
+ if (player1ObservationActive || player2ObservationActive) {
+ adjustedVelX = (int)(adjustedVelX * 0.6);
+ adjustedVelY = (int)(adjustedVelY * 0.6);
+ if (Math.abs(adjustedVelX) < 1) adjustedVelX = adjustedVelX >= 0 ? 1 : -1;
+ if (Math.abs(adjustedVelY) < 1) adjustedVelY = adjustedVelY >= 0 ? 1 : -1;
+ }
+
  // Time Loop slow motion effect - slows ball after time loop is activated
  if (player1TimeLoopSlowMoTimer > 0 || player2TimeLoopSlowMoTimer > 0) {
  // Check if either player has Chronos Rewind (Branch 1)
@@ -5712,9 +7080,14 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  if (fireballDuration >= maxFireballDuration) {
  fireballActive = false;
  fireballDuration = 0;
- // Restore initial velocity
- ballVelX = initialBallVelX;
- ballVelY = initialBallVelY;
+ // Restore initial speed and velocity
+ ballSpeed = initialBallSpeed;
+ // Update velocity components to match restored speed while preserving direction
+ double magnitude = Math.sqrt(ballVelX * ballVelX + ballVelY * ballVelY);
+ if (magnitude > 0) {
+ ballVelX = (int)((ballVelX / magnitude) * ballSpeed);
+ ballVelY = (int)((ballVelY / magnitude) * ballSpeed);
+ }
  }
  }
  
@@ -6021,6 +7394,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Branch 2: Afterimage Defense - check independent shadow
  Rectangle shadowRect = new Rectangle(10, player1IndependentShadowY, 10, paddleHeight1);
  if (ballRect.intersects(shadowRect)) {
+ ballSpeed += 0.1; // Increase ball speed on shadow clone hit
  ballVelX = Math.abs(ballVelX) + 3;
  ballX = 20;
  
@@ -6064,6 +7438,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int shadowY = player1ShadowPositions.get(i);
  Rectangle shadowRect = new Rectangle(10, shadowY, 10, paddleHeight1);
  if (ballRect.intersects(shadowRect)) {
+ ballSpeed += 0.1; // Increase ball speed on shadow clone hit
  ballVelX = Math.abs(ballVelX) + 3;
  ballX = 20;
  
@@ -6112,6 +7487,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Branch 2: Afterimage Defense - check independent shadow
  Rectangle shadowRect = new Rectangle(580, player2IndependentShadowY, 10, paddleHeight2);
  if (ballRect.intersects(shadowRect)) {
+ ballSpeed += 0.1; // Increase ball speed on shadow clone hit
  ballVelX = -(Math.abs(ballVelX) + 3);
  ballX = 565;
  
@@ -6155,6 +7531,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int shadowY = player2ShadowPositions.get(i);
  Rectangle shadowRect = new Rectangle(580, shadowY, 10, paddleHeight2);
  if (ballRect.intersects(shadowRect)) {
+ ballSpeed += 0.1; // Increase ball speed on shadow clone hit
  ballVelX = -(Math.abs(ballVelX) + 3);
  ballX = 565;
  
@@ -6192,13 +7569,165 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  }
  }
- 
+
+ // BARRIER COLLISION
+ // Player 1's barrier
+ if (player1BarrierActive) {
+ Rectangle barrierRect = new Rectangle(player1BarrierX, player1BarrierY, barrierWidth, barrierHeight);
+ if (ballRect.intersects(barrierRect)) {
+ int barrierBranch = player1AbilityBranches.getOrDefault("barrier", 0);
+ if (barrierBranch == 1 && getEffectiveAbilityLevel(1, "barrier") >= 3) {
+ // Mirror Shield - reflect at 2x speed
+ ballVelX = -ballVelX * 2;
+ ballVelY = (int)(ballVelY * 1.5);
+ } else if (barrierBranch == 2 && getEffectiveAbilityLevel(1, "barrier") >= 3) {
+ // Absorption Shield - catch ball (simplified: just reverse with delay)
+ ballVelX = -ballVelX;
+ player1BallAbsorbed = true;
+ } else {
+ // Base barrier - simple bounce
+ ballVelX = -ballVelX;
+ }
+ player1BarrierActive = false; // Barrier breaks after one hit
+ }
+ }
+ // Player 2's barrier
+ if (player2BarrierActive) {
+ Rectangle barrierRect = new Rectangle(player2BarrierX, player2BarrierY, barrierWidth, barrierHeight);
+ if (ballRect.intersects(barrierRect)) {
+ int barrierBranch = player2AbilityBranches.getOrDefault("barrier", 0);
+ if (barrierBranch == 1 && getEffectiveAbilityLevel(2, "barrier") >= 3) {
+ ballVelX = -ballVelX * 2;
+ ballVelY = (int)(ballVelY * 1.5);
+ } else if (barrierBranch == 2 && getEffectiveAbilityLevel(2, "barrier") >= 3) {
+ ballVelX = -ballVelX;
+ player2BallAbsorbed = true;
+ } else {
+ ballVelX = -ballVelX;
+ }
+ player2BarrierActive = false;
+ }
+ }
+
+ // TRAP COLLISION - BUFFED!
+ // Player 1's trap
+ if (player1TrapActive && !ballFrozenByTrap) {
+ Rectangle trapRect = new Rectangle(player1TrapX - trapSize/2, player1TrapY - trapSize/2, trapSize, trapSize);
+ if (ballRect.intersects(trapRect)) {
+ int trapBranch = player1AbilityBranches.getOrDefault("trap", 0);
+ int trapLevel = getEffectiveAbilityLevel(1, "trap");
+ if (trapBranch == 1 && trapLevel >= 3) {
+ // STICKY TRAP - Ball FREEZES for 2.5s + 3s reversed controls!
+ ballFrozenByTrap = true;
+ ballFreezeTimer = 250; // 2.5 seconds frozen
+ frozenBallX = ballX;
+ frozenBallY = ballY;
+ player2ReverseEffectTimer = 300; // 3 seconds reversed controls
+ player2StickyTimer = stickyDuration;
+ } else if (trapBranch == 2 && trapLevel >= 3) {
+ // EXPLOSIVE TRAP - Shockwave stuns 1.5s + shrinks 2.5s + 2.5x speed!
+ if (player2StunImmunityTimer == 0) player2StunTimer = 150; // 1.5s stun
+ player2ShrinkEffectTimer = 250; // 2.5s shrink
+ double angle = Math.random() * Math.PI * 2;
+ int speed = (int)(Math.sqrt(ballVelX*ballVelX + ballVelY*ballVelY) * 2.5); // 2.5x speed!
+ ballVelX = (int)(Math.cos(angle) * speed);
+ ballVelY = (int)(Math.sin(angle) * speed);
+ if (Math.abs(ballVelX) < 3) ballVelX = ballVelX >= 0 ? 3 : -3;
+ } else {
+ // Base trap - stun + redirect ball TOWARD opponent's side!
+ if (player2StunImmunityTimer == 0) player2StunTimer = 120; // 1.2s stun
+ // Redirect ball toward player 2's side (right)
+ int speed = Math.max(5, (int)Math.sqrt(ballVelX*ballVelX + ballVelY*ballVelY));
+ ballVelX = Math.abs(speed); // Force ball right toward opponent
+ ballVelY = (int)((Math.random() - 0.5) * speed); // Randomize vertical slightly
+ }
+ player1TrapActive = false; // Trap triggers once
+ }
+ }
+ // Player 2's trap
+ if (player2TrapActive && !ballFrozenByTrap) {
+ Rectangle trapRect = new Rectangle(player2TrapX - trapSize/2, player2TrapY - trapSize/2, trapSize, trapSize);
+ if (ballRect.intersects(trapRect)) {
+ int trapBranch = player2AbilityBranches.getOrDefault("trap", 0);
+ int trapLevel = getEffectiveAbilityLevel(2, "trap");
+ if (trapBranch == 1 && trapLevel >= 3) {
+ // STICKY TRAP - Ball FREEZES for 2.5s + 3s reversed controls!
+ ballFrozenByTrap = true;
+ ballFreezeTimer = 250; // 2.5 seconds frozen
+ frozenBallX = ballX;
+ frozenBallY = ballY;
+ player1ReverseEffectTimer = 300; // 3 seconds reversed controls
+ player1StickyTimer = stickyDuration;
+ } else if (trapBranch == 2 && trapLevel >= 3) {
+ // EXPLOSIVE TRAP - Shockwave stuns 1.5s + shrinks 2.5s + 2.5x speed!
+ if (player1StunImmunityTimer == 0) player1StunTimer = 150; // 1.5s stun
+ player1ShrinkEffectTimer = 250; // 2.5s shrink
+ double angle = Math.random() * Math.PI * 2;
+ int speed = (int)(Math.sqrt(ballVelX*ballVelX + ballVelY*ballVelY) * 2.5);
+ ballVelX = (int)(Math.cos(angle) * speed);
+ ballVelY = (int)(Math.sin(angle) * speed);
+ if (Math.abs(ballVelX) < 3) ballVelX = ballVelX >= 0 ? 3 : -3;
+ } else {
+ // Base trap - stun + redirect ball TOWARD opponent's side!
+ if (player1StunImmunityTimer == 0) player1StunTimer = 120; // 1.2s stun
+ // Redirect ball toward player 1's side (left)
+ int speed = Math.max(5, (int)Math.sqrt(ballVelX*ballVelX + ballVelY*ballVelY));
+ ballVelX = -Math.abs(speed); // Force ball left toward opponent
+ ballVelY = (int)((Math.random() - 0.5) * speed); // Randomize vertical slightly
+ }
+ player2TrapActive = false;
+ }
+ }
+
+ // Handle frozen ball (from Sticky Trap)
+ if (ballFrozenByTrap) {
+ ballFreezeTimer--;
+ ballX = frozenBallX;
+ ballY = frozenBallY;
+ if (ballFreezeTimer <= 0) {
+ ballFrozenByTrap = false;
+ // Ball releases at high speed toward the trapper's opponent
+ double angle = Math.random() * Math.PI * 2;
+ ballVelX = (int)(Math.cos(angle) * 7);
+ ballVelY = (int)(Math.sin(angle) * 7);
+ }
+ }
+
+ // STICKY EFFECT - slows ball
+ if (player1StickyTimer > 0 || player2StickyTimer > 0) {
+ ballVelX = (int)(ballVelX * 0.3);
+ ballVelY = (int)(ballVelY * 0.3);
+ // Ensure minimum speed
+ if (Math.abs(ballVelX) < 1) ballVelX = ballVelX >= 0 ? 1 : -1;
+ }
+
+ // OBSERVATION HAKI - slow-mo is now handled via adjustedVel in ball movement section
+ // (no longer modifies ballVelX/ballVelY directly to avoid integer division bug)
+
  // Player 1 paddle collision (unless player 1 has ghost effect active)
- if (ballRect.intersects(paddle1Rect) && ballVelX < 0) {
+ // ARMAMENT HAKI PHASE - Ball phases through opponent paddle once (from player 2's armament)
+ if (ballRect.intersects(paddle1Rect) && ballVelX < 0 && player2HakiPhaseActive) {
+ player2HakiPhaseActive = false; // Used up
+ // Ball continues without bouncing - unblockable!
+ }
+ // HOLLOW FORM - Ball phases through paddle once
+ else if (ballRect.intersects(paddle1Rect) && ballVelX < 0 && player2HollowActive && !player2HollowPhased) {
+ // Ball phases through - mark as used
+ player2HollowPhased = true;
+ // Ball continues without bouncing
+ } else if (ballRect.intersects(paddle1Rect) && ballVelX < 0) {
  if (player1GhostEffectTimer == 0) {
  // Normal collision - increase horizontal speed gradually
- // Increase speed by a small amount each hit (0.5 instead of 1)
- ballVelX = (int)(Math.abs(ballVelX) * 1.05);
+ // Increase ball speed by 0.3 on paddle hit
+ ballSpeed += 0.3;
+ ballNotHitTimer = 0; // Reset the ball-not-hit timer
+
+ // Update velocity components to match new speed while preserving direction
+ double magnitude = Math.sqrt(ballVelX * ballVelX + ballVelY * ballVelY);
+ if (magnitude > 0) {
+ ballVelX = -(int)((ballVelX / magnitude) * ballSpeed);  // Negate to reverse direction
+ ballVelY = (int)((ballVelY / magnitude) * ballSpeed);
+ }
  ballX = 20;
  
  
@@ -6207,7 +7736,24 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  ballVelX *= 2;
  ballVelY *= 2;
  }
- 
+
+ // BANKAI - ZANGETSU SPEED BOOST - Double ball speed during Zangetsu!
+ if (player1ZangetsuActive) {
+ ballVelX *= 2;
+ ballVelY = (int)(ballVelY * 1.5);
+ }
+
+ // BANKAI PERMANENT BALL SPEED MULTIPLIER - stacks forever!
+ if (player1BallSpeedMultiplier > 1.0) {
+ ballVelX = (int)(ballVelX * player1BallSpeedMultiplier);
+ ballVelY = (int)(ballVelY * player1BallSpeedMultiplier);
+ }
+
+ // ARMAMENT HAKI - Extra hit power
+ if (player1ArmamentActive) {
+ ballVelX = (int)(ballVelX * 1.5);
+ }
+
  // Trigger lag spike for opponent 6 seconds later (reduced by 0.2s per level)
  if (getEffectiveAbilityLevel(1, "lag_spike") > 0) {
  int lagLevel = player1Abilities.getOrDefault("lag_spike", 0);
@@ -6299,10 +7845,28 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  
  // Player 2 paddle collision (unless player 2 has ghost effect active)
- if (ballRect.intersects(paddle2Rect) && ballVelX > 0) {
+ // ARMAMENT HAKI PHASE - Ball phases through opponent paddle once (from player 1's armament)
+ if (ballRect.intersects(paddle2Rect) && ballVelX > 0 && player1HakiPhaseActive) {
+ player1HakiPhaseActive = false; // Used up
+ // Ball continues without bouncing - unblockable!
+ }
+ // HOLLOW FORM - Ball phases through paddle once
+ else if (ballRect.intersects(paddle2Rect) && ballVelX > 0 && player1HollowActive && !player1HollowPhased) {
+ // Ball phases through - mark as used
+ player1HollowPhased = true;
+ // Ball continues without bouncing
+ } else if (ballRect.intersects(paddle2Rect) && ballVelX > 0) {
  if (player2GhostEffectTimer == 0) {
- // Increase speed by a small amount each hit (5% increase)
- ballVelX = -(int)(Math.abs(ballVelX) * 1.05);
+ // Increase ball speed by 0.3 on paddle hit
+ ballSpeed += 0.3;
+ ballNotHitTimer = 0; // Reset the ball-not-hit timer
+
+ // Update velocity components to match new speed while preserving direction
+ double magnitude = Math.sqrt(ballVelX * ballVelX + ballVelY * ballVelY);
+ if (magnitude > 0) {
+ ballVelX = -(int)((ballVelX / magnitude) * ballSpeed);
+ ballVelY = (int)((ballVelY / magnitude) * ballSpeed);
+ }
  ballX = 565;
  
  // DASH SPEED BOOST - If player just dashed, double the ball speed!
@@ -6310,7 +7874,24 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  ballVelX *= 2;
  ballVelY *= 2;
  }
- 
+
+ // BANKAI - ZANGETSU SPEED BOOST - Double ball speed during Zangetsu!
+ if (player2ZangetsuActive) {
+ ballVelX *= 2;
+ ballVelY = (int)(ballVelY * 1.5);
+ }
+
+ // BANKAI PERMANENT BALL SPEED MULTIPLIER - stacks forever!
+ if (player2BallSpeedMultiplier > 1.0) {
+ ballVelX = (int)(ballVelX * player2BallSpeedMultiplier);
+ ballVelY = (int)(ballVelY * player2BallSpeedMultiplier);
+ }
+
+ // ARMAMENT HAKI - Extra hit power
+ if (player2ArmamentActive) {
+ ballVelX = (int)(ballVelX * 1.5);
+ }
+
  // Trigger lag spike for opponent 6 seconds later (reduced by 0.2s per level)
  if (getEffectiveAbilityLevel(2, "lag_spike") > 0) {
  int lagLevel = player2Abilities.getOrDefault("lag_spike", 0);
@@ -6787,6 +8368,24 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  }
  
+ // OBSERVATION HAKI - Auto-block: teleport paddle to block ball once per activation
+ // Player 1 auto-block (when ball is about to score on left side)
+ if (player1ObservationActive && !player1ObsAutoBlockUsed && ballX < 30 && ballVelX < 0) {
+ int ballCenterYNow = ballY + 7;
+ int paddleH = getPaddleHeight(1, shrinkPaddlesActive);
+ paddle1Y = ballCenterYNow - paddleH / 2; // Teleport paddle to ball
+ paddle1Y = Math.max(0, Math.min(400 - paddleH, paddle1Y)); // Clamp to bounds
+ player1ObsAutoBlockUsed = true;
+ }
+ // Player 2 auto-block (when ball is about to score on right side)
+ if (player2ObservationActive && !player2ObsAutoBlockUsed && ballX > 570 && ballVelX > 0) {
+ int ballCenterYNow = ballY + 7;
+ int paddleH = getPaddleHeight(2, shrinkPaddlesActive);
+ paddle2Y = ballCenterYNow - paddleH / 2; // Teleport paddle to ball
+ paddle2Y = Math.max(0, Math.min(400 - paddleH, paddle2Y)); // Clamp to bounds
+ player2ObsAutoBlockUsed = true;
+ }
+
  // Scoring
  if (ballX < 0 || ballX > 600) {
  // Reset map modifiers on score
@@ -6842,7 +8441,20 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  
  scorePlayer2 += pointsGained;
  totalPointsThisLevel2 += pointsGained;
- 
+ noScoreTimer = 0; // Reset no-score timer
+ ballNotHitTimer = 0; // Reset ball-not-hit timer
+
+ // STORY MODE - Check for boss victory (player defeat)
+ if (storyModeActive) {
+ storyBossScore = scorePlayer2;
+ storyPlayerScore = scorePlayer1;
+ int scoreNeeded = storyLevelScoreToWin[storyModeLevel - 1];
+ if (storyBossScore >= scoreNeeded) {
+ handleStoryModeDefeat();
+ return;
+ }
+ }
+
  // Reset opponent's combo
  player1ComboCount = 0;
  
@@ -6922,14 +8534,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  player1LastUnderdogTrigger = 0;
  }
  
- // Regular level up every 5 points
+ // Level up: 1st score, then 2 more, then 3 more, etc.
  if (totalPointsThisLevel2 >= pointsToNextLevel2) {
  level2++;
  totalPointsThisLevel2 = 0;
- // Every other level increases points needed by 1
- if (level2 % 2 == 0) {
- pointsToNextLevel2++;
- }
+ pointsToNextLevel2++; // Next level needs 1 more point
  offerAbilityChoice(2, 1);
  }
  } else {
@@ -6981,7 +8590,20 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  
  scorePlayer1 += pointsGained;
  totalPointsThisLevel1 += pointsGained;
- 
+ noScoreTimer = 0; // Reset no-score timer
+ ballNotHitTimer = 0; // Reset ball-not-hit timer
+
+ // STORY MODE - Check for player victory!
+ if (storyModeActive) {
+ storyPlayerScore = scorePlayer1;
+ storyBossScore = scorePlayer2;
+ int scoreNeeded = storyLevelScoreToWin[storyModeLevel - 1];
+ if (storyPlayerScore >= scoreNeeded) {
+ handleStoryModeVictory();
+ return;
+ }
+ }
+
  // Reset opponent's combo
  player2ComboCount = 0;
  
@@ -7051,14 +8673,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  player2LastUnderdogTrigger = 0;
  }
  
- // Regular level up every 5 points
+ // Level up: 1st score, then 2 more, then 3 more, etc.
  if (totalPointsThisLevel1 >= pointsToNextLevel1) {
  level1++;
  totalPointsThisLevel1 = 0;
- // Every other level increases points needed by 1
- if (level1 % 2 == 0) {
- pointsToNextLevel1++;
- }
+ pointsToNextLevel1++; // Next level needs 1 more point
  if (singlePlayer) {
  ballSpeedMultiplier += 0.02;
  aiSpeedMultiplier += 0.01;
@@ -7067,12 +8686,21 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  offerAbilityChoice(1, 1);
  }
  }
+ // Reset haki effects on score
+ player1HakiPhaseActive = false; player2HakiPhaseActive = false;
+ player1ObsAutoBlockUsed = false; player2ObsAutoBlockUsed = false;
+ player1ObsSlowFactor = 1.0; player2ObsSlowFactor = 1.0;
+ player1ArmamentActive = false; player2ArmamentActive = false;
+ player1ObservationActive = false; player2ObservationActive = false;
+
  ballX = 250;
  ballY = 150;
+ ballSpeed = 3.0; // Reset speed on new rally
  // Winner of the point gets the ball
  ballVelX = ballX < 0 ? -3 : 3; // If ball went left, Player 2 won, so ball goes left
  ballVelY = 3;
  initialBallVelX = ballVelX; initialBallVelY = ballVelY; // Store initial velocity
+ initialBallSpeed = 3.0; // Store initial speed for fireball restoration
  dangerZoneTime = 0;
  }
  
@@ -7168,8 +8796,17 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  break;
  case "fireball":
  // Ball becomes a fireball - speeds up significantly and ignores paddle size
- ballVelX *= 1.8;
- ballVelY *= 1.8;
+ // Store current speed as the initial speed for this fireball effect
+ initialBallSpeed = ballSpeed * 1.8;
+ ballSpeed = initialBallSpeed;
+
+ // Update velocity components to match new speed while preserving direction
+ double magnitude = Math.sqrt(ballVelX * ballVelX + ballVelY * ballVelY);
+ if (magnitude > 0) {
+ ballVelX = (int)((ballVelX / magnitude) * ballSpeed);
+ ballVelY = (int)((ballVelY / magnitude) * ballSpeed);
+ }
+
  fireballActive = true;
  fireballDuration = 0;
  break;
@@ -7250,6 +8887,49 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int y = 50 + (int)(Math.random() * 300);
  powerUps.add(new PowerUp(x, y, "zigzag"));
  }
+ }
+
+ // 2-MINUTE NO-SCORE UPGRADE - Both players get ability upgrade if no one scores for 2 minutes
+ if (noScoreTimer >= noScoreThreshold) {
+ noScoreTimer = 0; // Reset timer
+
+ // Pause game briefly and give both players an upgrade
+ isPaused = true;
+ JOptionPane.showMessageDialog(null,
+ " 2 MINUTES WITHOUT SCORING! \n\nBoth players receive an ability upgrade!",
+ "STALEMATE BONUS!",
+ JOptionPane.INFORMATION_MESSAGE);
+
+ // Give Player 1 an upgrade
+ offerAbilityChoice(1, 1);
+
+ // Give Player 2 an upgrade (or AI)
+ if (singlePlayer) {
+ // AI gets a random ability upgrade
+ ArrayList<String> aiAbilities = new ArrayList<>(player2Abilities.keySet());
+ if (!aiAbilities.isEmpty()) {
+ String randomAbility = aiAbilities.get((int)(Math.random() * aiAbilities.size()));
+ int currentLevel = player2Abilities.get(randomAbility);
+ player2Abilities.put(randomAbility, currentLevel + 1);
+ JOptionPane.showMessageDialog(null,
+ "AI upgraded " + getAbilityShortName(randomAbility) + " to Level " + (currentLevel + 1) + "!",
+ "AI Upgrade",
+ JOptionPane.INFORMATION_MESSAGE);
+ } else {
+ // AI has no abilities, give them a random one
+ String randomAbility = allAbilities[(int)(Math.random() * allAbilities.length)];
+ player2Abilities.put(randomAbility, 1);
+ JOptionPane.showMessageDialog(null,
+ "AI gained " + getAbilityShortName(randomAbility) + "!",
+ "AI New Ability",
+ JOptionPane.INFORMATION_MESSAGE);
+ }
+ } else {
+ // Give Player 2 an upgrade
+ offerAbilityChoice(2, 1);
+ }
+
+ isPaused = false;
  }
 
  repaint();
@@ -7792,8 +9472,259 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  player2TimeLoopTimer = 0;
  }
  }
+
+ // HAKI ability activation
+ {
+ int hakiLevel1 = getEffectiveAbilityLevel(1, "haki");
+ int hakiBranch1 = player1AbilityBranches.getOrDefault("haki", 0);
+ int p1HakiCD = (hakiBranch1 == 1) ? hakiArmamentCooldown - (Math.max(0, hakiLevel1 - 2) * 30) :
+                (hakiBranch1 == 2) ? hakiObservationCooldown - (Math.max(0, hakiLevel1 - 2) * 40) :
+                hakiBaseCooldown;
+ if (code == player1AbilityKey && hakiLevel1 > 0 && player1HakiTimer >= p1HakiCD) {
+
+ if (hakiBranch1 == 1 && hakiLevel1 >= 3) {
+ // Branch 1: Armament Haki - stun + black paddle + phasing ball + debuff immunity
+ player2StunTimer = hakiStunDuration + (hakiLevel1 - 1) * 20; // KEEPS base stun
+ player1ArmamentActive = true;
+ player1ArmamentDuration = armamentBaseDuration + (hakiLevel1 - 2) * 50;
+ player1HakiPhaseActive = true; // Next hit phases through opponent paddle
+ } else if (hakiBranch1 == 2 && hakiLevel1 >= 3) {
+ // Branch 2: Observation Haki - stun + opponent slow-mo + trajectory + auto-block
+ player2StunTimer = hakiStunDuration + (hakiLevel1 - 1) * 20; // KEEPS base stun
+ player1ObservationActive = true;
+ player1ObservationDuration = observationBaseDuration + (hakiLevel1 - 2) * 30;
+ player2ObsSlowFactor = 0.5; // Opponent paddle moves at 50% speed
+ player1ObsAutoBlockUsed = false; // Reset auto-block for this activation
+ } else {
+ // Base: Conqueror's Haki - stun opponent
+ player2StunTimer = hakiStunDuration + (hakiLevel1 - 1) * 20;
  }
- 
+ player1HakiTimer = 0;
+ }
+ }
+ {
+ int hakiLevel2 = getEffectiveAbilityLevel(2, "haki");
+ int hakiBranch2 = player2AbilityBranches.getOrDefault("haki", 0);
+ int p2HakiCD = (hakiBranch2 == 1) ? hakiArmamentCooldown - (Math.max(0, hakiLevel2 - 2) * 30) :
+                (hakiBranch2 == 2) ? hakiObservationCooldown - (Math.max(0, hakiLevel2 - 2) * 40) :
+                hakiBaseCooldown;
+ if (code == player2AbilityKey && hakiLevel2 > 0 && player2HakiTimer >= p2HakiCD) {
+
+ if (hakiBranch2 == 1 && hakiLevel2 >= 3) {
+ // Branch 1: Armament Haki - stun + black paddle + phasing ball + debuff immunity
+ player1StunTimer = hakiStunDuration + (hakiLevel2 - 1) * 20; // KEEPS base stun
+ player2ArmamentActive = true;
+ player2ArmamentDuration = armamentBaseDuration + (hakiLevel2 - 2) * 50;
+ player2HakiPhaseActive = true; // Next hit phases through opponent paddle
+ } else if (hakiBranch2 == 2 && hakiLevel2 >= 3) {
+ // Branch 2: Observation Haki - stun + opponent slow-mo + trajectory + auto-block
+ player1StunTimer = hakiStunDuration + (hakiLevel2 - 1) * 20; // KEEPS base stun
+ player2ObservationActive = true;
+ player2ObservationDuration = observationBaseDuration + (hakiLevel2 - 2) * 30;
+ player1ObsSlowFactor = 0.5; // Opponent paddle moves at 50% speed
+ player2ObsAutoBlockUsed = false; // Reset auto-block for this activation
+ } else {
+ // Base: Conqueror's Haki - stun opponent
+ player1StunTimer = hakiStunDuration + (hakiLevel2 - 1) * 20;
+ }
+ player2HakiTimer = 0;
+ }
+ }
+
+ // BARRIER ability activation
+ if (code == player1AbilityKey && getEffectiveAbilityLevel(1, "barrier") > 0 && player1BarrierTimer >= barrierCooldown && !player1BarrierActive) {
+ int barrierLevel = getEffectiveAbilityLevel(1, "barrier");
+ player1BarrierActive = true;
+ player1BarrierX = 80; // Place barrier in player 1's side
+ player1BarrierY = paddle1Y + getPaddleHeight(1, shrinkPaddlesActive) / 2 - barrierHeight / 2;
+ player1BarrierDuration = barrierBaseDuration + (barrierLevel - 1) * 100;
+ player1BarrierTimer = 0;
+ }
+ if (code == player2AbilityKey && getEffectiveAbilityLevel(2, "barrier") > 0 && player2BarrierTimer >= barrierCooldown && !player2BarrierActive) {
+ int barrierLevel = getEffectiveAbilityLevel(2, "barrier");
+ player2BarrierActive = true;
+ player2BarrierX = 510; // Place barrier in player 2's side
+ player2BarrierY = paddle2Y + getPaddleHeight(2, shrinkPaddlesActive) / 2 - barrierHeight / 2;
+ player2BarrierDuration = barrierBaseDuration + (barrierLevel - 1) * 100;
+ player2BarrierTimer = 0;
+ }
+
+ // TRAP ability activation - places trap in center of field
+ if (code == player1AbilityKey && getEffectiveAbilityLevel(1, "trap") > 0 && player1TrapTimer >= trapCooldown && !player1TrapActive) {
+ int trapLevel = getEffectiveAbilityLevel(1, "trap");
+ player1TrapActive = true;
+ player1TrapX = 180 + (int)(Math.random() * 230); // Wider center area coverage
+ player1TrapY = 30 + (int)(Math.random() * 340);
+ player1TrapDuration = trapBaseDuration + (trapLevel - 1) * 150;
+ player1TrapTimer = 0;
+ }
+ if (code == player2AbilityKey && getEffectiveAbilityLevel(2, "trap") > 0 && player2TrapTimer >= trapCooldown && !player2TrapActive) {
+ int trapLevel = getEffectiveAbilityLevel(2, "trap");
+ player2TrapActive = true;
+ player2TrapX = 180 + (int)(Math.random() * 230); // Wider center area coverage
+ player2TrapY = 30 + (int)(Math.random() * 340);
+ player2TrapDuration = trapBaseDuration + (trapLevel - 1) * 150;
+ player2TrapTimer = 0;
+ }
+
+ // SCREEN WARP ability activation
+ if (code == player1AbilityKey && getEffectiveAbilityLevel(1, "screen_warp") > 0 && player1WarpTimer >= warpCooldown) {
+ int warpLevel = getEffectiveAbilityLevel(1, "screen_warp");
+ int warpBranch = player1AbilityBranches.getOrDefault("screen_warp", 0);
+
+ if (warpBranch == 1 && warpLevel >= 3) {
+ // Branch 1: Full Inversion - flip opponent's screen
+ player2InversionTimer = warpBaseDuration + (warpLevel - 2) * 30;
+ } else if (warpBranch == 2 && warpLevel >= 3) {
+ // Branch 2: Tunnel Vision - shrink visible area
+ player2TunnelTimer = warpBaseDuration + (warpLevel - 2) * 40;
+ } else {
+ // Base: Screen distortion
+ player2WarpEffectTimer = warpBaseDuration + (warpLevel - 1) * 30;
+ }
+ player1WarpTimer = 0;
+ }
+ if (code == player2AbilityKey && getEffectiveAbilityLevel(2, "screen_warp") > 0 && player2WarpTimer >= warpCooldown) {
+ int warpLevel = getEffectiveAbilityLevel(2, "screen_warp");
+ int warpBranch = player2AbilityBranches.getOrDefault("screen_warp", 0);
+
+ if (warpBranch == 1 && warpLevel >= 3) {
+ player1InversionTimer = warpBaseDuration + (warpLevel - 2) * 30;
+ } else if (warpBranch == 2 && warpLevel >= 3) {
+ player1TunnelTimer = warpBaseDuration + (warpLevel - 2) * 40;
+ } else {
+ player1WarpEffectTimer = warpBaseDuration + (warpLevel - 1) * 30;
+ }
+ player2WarpTimer = 0;
+ }
+
+ // BANKAI ability activation - TWO MODES:
+ // 1. If Bankai NOT active: Activate Bankai mode (paddle turns black, gain boosts)
+ // 2. If Bankai IS active: SWING ZANGETSU - ball goes 5x speed if nearby!
+ if (code == player1AbilityKey && getEffectiveAbilityLevel(1, "bankai") > 0) {
+ if (!player1BankaiActive && player1BankaiTimer >= bankaiCooldown) {
+ // ACTIVATE BANKAI MODE
+ int bankaiLevel = getEffectiveAbilityLevel(1, "bankai");
+ int bankaiBranch = player1AbilityBranches.getOrDefault("bankai", 0);
+
+ player1BankaiActive = true;
+ player1BankaiDuration = bankaiBaseDuration + (bankaiLevel - 1) * 100; // 8s + 1s per level
+
+ // PERMANENT STACKING BOOSTS!
+ player1BankaiStacks++;
+ player1PermanentSpeedBonus += 1; // +1 paddle speed per activation
+
+ if (bankaiBranch == 1 && bankaiLevel >= 3) {
+ // Branch 1: Zangetsu - ATTACK FOCUS
+ player1ZangetsuActive = true;
+ player1BallSpeedMultiplier += 0.15; // +15% ball speed per stack
+ player1PermanentPaddleBonus += 5; // Small paddle boost
+ } else if (bankaiBranch == 2 && bankaiLevel >= 3) {
+ // Branch 2: Hollow Form - DEFENSE FOCUS
+ player1HollowActive = true;
+ player1HollowPhased = false;
+ player1PermanentPaddleBonus += 15; // +15 paddle height per stack
+ player1BallSpeedMultiplier += 0.05; // Small ball speed boost
+ } else {
+ // Base Bankai - balanced
+ player1PermanentPaddleBonus += 10;
+ player1BallSpeedMultiplier += 0.10;
+ }
+
+ // At 5+ stacks, become immune to debuffs!
+ if (player1BankaiStacks >= 5) {
+ player1HasBankaiImmunity = true;
+ }
+
+ player1BankaiTimer = 0;
+ } else if (player1BankaiActive && player1SwordSwingCooldown == 0) {
+ // SWING ZANGETSU! Ball goes 5x speed if within range!
+ player1SwordSwingTimer = swordSwingDuration;
+ player1SwordSwingCooldown = swordSwingCooldownTime;
+ player1TotalSwordSwings++;
+
+ int bankaiLevel = getEffectiveAbilityLevel(1, "bankai");
+ int bankaiBranch = player1AbilityBranches.getOrDefault("bankai", 0);
+
+ // Check if ball is near player 1's paddle (within 100 pixels)
+ int paddleHeight = getPaddleHeight(1, shrinkPaddlesActive);
+ if (ballX < 120 && ballVelX < 0) { // Ball coming toward player 1
+ // ZANGETSU SLASH - 5x ball speed!
+ double multiplier = 5.0;
+ if (bankaiBranch == 1 && bankaiLevel >= 3) multiplier = 7.0; // Zangetsu branch = 7x!
+ ballVelX = (int)(Math.abs(ballVelX) * multiplier); // Send it flying!
+ ballVelY = (int)(ballVelY * 1.5);
+ }
+
+ // After 3 swings, fire GETSUGA TENSHO!
+ if (player1TotalSwordSwings % 3 == 0) {
+ boolean isEvolved = bankaiBranch == 1 && bankaiLevel >= 4; // Evolved at level 4+ Zangetsu
+ int startX = 25;
+ int startY = paddle1Y + paddleHeight / 2;
+ getsugaProjectiles.add(new GetsugaTensho(startX, startY, 15, 1, isEvolved));
+ }
+ }
+ }
+ if (code == player2AbilityKey && getEffectiveAbilityLevel(2, "bankai") > 0) {
+ if (!player2BankaiActive && player2BankaiTimer >= bankaiCooldown) {
+ // ACTIVATE BANKAI MODE
+ int bankaiLevel = getEffectiveAbilityLevel(2, "bankai");
+ int bankaiBranch = player2AbilityBranches.getOrDefault("bankai", 0);
+
+ player2BankaiActive = true;
+ player2BankaiDuration = bankaiBaseDuration + (bankaiLevel - 1) * 100;
+
+ // PERMANENT STACKING BOOSTS!
+ player2BankaiStacks++;
+ player2PermanentSpeedBonus += 1;
+
+ if (bankaiBranch == 1 && bankaiLevel >= 3) {
+ player2ZangetsuActive = true;
+ player2BallSpeedMultiplier += 0.15;
+ player2PermanentPaddleBonus += 5;
+ } else if (bankaiBranch == 2 && bankaiLevel >= 3) {
+ player2HollowActive = true;
+ player2HollowPhased = false;
+ player2PermanentPaddleBonus += 15;
+ player2BallSpeedMultiplier += 0.05;
+ } else {
+ player2PermanentPaddleBonus += 10;
+ player2BallSpeedMultiplier += 0.10;
+ }
+
+ if (player2BankaiStacks >= 5) {
+ player2HasBankaiImmunity = true;
+ }
+
+ player2BankaiTimer = 0;
+ } else if (player2BankaiActive && player2SwordSwingCooldown == 0) {
+ // SWING ZANGETSU!
+ player2SwordSwingTimer = swordSwingDuration;
+ player2SwordSwingCooldown = swordSwingCooldownTime;
+ player2TotalSwordSwings++;
+
+ int bankaiLevel = getEffectiveAbilityLevel(2, "bankai");
+ int bankaiBranch = player2AbilityBranches.getOrDefault("bankai", 0);
+
+ int paddleHeight = getPaddleHeight(2, shrinkPaddlesActive);
+ if (ballX > 480 && ballVelX > 0) { // Ball coming toward player 2
+ double multiplier = 5.0;
+ if (bankaiBranch == 1 && bankaiLevel >= 3) multiplier = 7.0;
+ ballVelX = -(int)(Math.abs(ballVelX) * multiplier);
+ ballVelY = (int)(ballVelY * 1.5);
+ }
+
+ // After 3 swings, fire GETSUGA TENSHO!
+ if (player2TotalSwordSwings % 3 == 0) {
+ boolean isEvolved = bankaiBranch == 1 && bankaiLevel >= 4;
+ int startX = 575;
+ int startY = paddle2Y + paddleHeight / 2;
+ getsugaProjectiles.add(new GetsugaTensho(startX, startY, -15, 2, isEvolved));
+ }
+ }
+ }
+ }
+
  void handleCheatMenu() {
  boolean wasPaused = isPaused;
  isPaused = true;
@@ -8297,18 +10228,154 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  }
 
- // Multiplayer removed: LAN discovery stripped
+ // ============== ONLINE MULTIPLAYER ==============
 
- // Multiplayer removed: LAN broadcast stripped
+ static void startOnlineMultiplayer() {
+ // Get server URL
+ String defaultUrl = "http://localhost:3000";
+ String serverUrl = JOptionPane.showInputDialog(null,
+ "Enter server URL:\n\n" +
+ "(Leave default for local testing)",
+ defaultUrl);
+
+ if (serverUrl == null || serverUrl.trim().isEmpty()) {
+ return; // User cancelled
+ }
+
+ // Get player name
+ String playerName = JOptionPane.showInputDialog(null,
+ "Enter your name:",
+ "Player");
+
+ if (playerName == null || playerName.trim().isEmpty()) {
+ playerName = "Player";
+ }
+
+ // Create game instance
+ final PingPongGame game = new PingPongGame(false, 1);
+ game.isOnlineGame = true;
+ game.singlePlayer = false;
+ game.serverUrl = serverUrl.trim();
+
+ // Create network client
+ game.networkClient = new NetworkClient(serverUrl.trim());
+
+ final String finalPlayerName = playerName.trim();
+
+ // Set up callbacks
+ game.networkClient.setOnConnected(() -> {
+ System.out.println("Connected to server!");
+ });
+
+ game.networkClient.setOnMatchFound(gameId -> {
+ System.out.println("Match found! Game ID: " + gameId);
+ });
+
+ game.networkClient.setOnGameReady(() -> {
+ game.isHost = game.networkClient.isHost();
+ System.out.println("Game ready! I am " + (game.isHost ? "HOST" : "CLIENT"));
+ game.isPaused = false;
+ });
+
+ game.networkClient.setOnPlayerInput(input -> {
+ // Received input from opponent
+ if (input.containsKey("gameState")) {
+ // We're the client - apply host's game state
+ if (input.containsKey("ballX")) game.ballX = Integer.parseInt(input.get("ballX"));
+ if (input.containsKey("ballY")) game.ballY = Integer.parseInt(input.get("ballY"));
+ if (input.containsKey("ballVelX")) game.ballVelX = Integer.parseInt(input.get("ballVelX"));
+ if (input.containsKey("ballVelY")) game.ballVelY = Integer.parseInt(input.get("ballVelY"));
+ if (input.containsKey("paddle1Y")) game.paddle1Y = Integer.parseInt(input.get("paddle1Y"));
+ if (input.containsKey("score1")) game.player1.score = Integer.parseInt(input.get("score1"));
+ if (input.containsKey("score2")) game.player2.score = Integer.parseInt(input.get("score2"));
+ } else if (input.containsKey("paddleY")) {
+ // We're the host - apply opponent's paddle position
+ game.remotePaddleY = Integer.parseInt(input.get("paddleY"));
+ }
+ });
+
+ game.networkClient.setOnPlayerDisconnected(name -> {
+ JOptionPane.showMessageDialog(null, name + " disconnected!", "Opponent Left", JOptionPane.WARNING_MESSAGE);
+ game.isPaused = true;
+ });
+
+ game.networkClient.setOnError(error -> {
+ JOptionPane.showMessageDialog(null, "Connection error: " + error, "Error", JOptionPane.ERROR_MESSAGE);
+ });
+
+ game.networkClient.setOnWaiting(msg -> {
+ System.out.println(msg);
+ });
+
+ // Show connecting message
+ JOptionPane.showMessageDialog(null, "Connecting to server...\nLooking for opponent...", "Quick Match", JOptionPane.INFORMATION_MESSAGE);
+
+ // Connect and start quick match
+ game.networkClient.connect().thenAccept(v -> {
+ game.networkClient.joinQuickMatch(finalPlayerName);
+ }).exceptionally(ex -> {
+ JOptionPane.showMessageDialog(null, "Failed to connect: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+ return null;
+ });
+ }
+
+ void sendOnlineGameState() {
+ if (!isOnlineGame || networkClient == null || !networkClient.isInGame()) return;
+
+ networkSendCounter++;
+ if (networkSendCounter < networkSendInterval) return;
+ networkSendCounter = 0;
+
+ if (isHost) {
+ // Host sends full game state
+ networkClient.sendGameState(ballX, ballY, ballVelX, ballVelY,
+ paddle1Y, paddle2Y, player1.score, player2.score);
+ } else {
+ // Client sends only their paddle position
+ networkClient.sendPaddlePosition(paddle2Y);
+ }
+ }
+
+ void applyOnlineInput() {
+ if (!isOnlineGame) return;
+
+ if (isHost) {
+ // Host applies remote player's paddle position to paddle2
+ paddle2Y = remotePaddleY;
+ }
+ // Client gets full state from host via callback
+ }
+
+ // ============== END ONLINE MULTIPLAYER ==============
 
  public static void main(String[] args) {
- String[] options = {"1 Player", "2 Players (Local)", "2 Players (Online)"};
- int choice = JOptionPane.showOptionDialog(null, "Choose Game Mode:", "Ping Pong", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
- 
+ String[] options = {"1 Player", "2 Players (Local)", "ONLINE MULTIPLAYER", "STORY MODE"};
+ int choice = JOptionPane.showOptionDialog(null,
+ "Choose Game Mode:\n\n" +
+ "1 Player: Classic mode vs AI\n" +
+ "2 Players: Local multiplayer\n" +
+ "ONLINE MULTIPLAYER: Play against others online!\n" +
+ "STORY MODE: Unlock abilities by defeating bosses!",
+ "Ping Pong", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+
  int difficulty = 1; // Default to Normal
+
+ if (choice == 2) {
+ // ONLINE MULTIPLAYER
+ startOnlineMultiplayer();
+ return;
+ }
+
+ if (choice == 3) {
+ // STORY MODE
+ PingPongGame game = new PingPongGame(true, 1);
+ game.initializeStoryMode();
+ return;
+ }
+
  if (choice == 0) { // Single player - ask for difficulty
  String[] difficultyOptions = {"Normal", "Hard", "Impossible", "Learning AI"};
- int diffChoice = JOptionPane.showOptionDialog(null, 
+ int diffChoice = JOptionPane.showOptionDialog(null,
  "Choose AI Difficulty:\n\n" +
  "Normal: Standard AI - Good challenge\n\n" +
  "Hard: Faster and smarter AI with prediction\n\n" +
@@ -8325,12 +10392,12 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  " Gets progressively stronger as it learns\n" +
  " Mimics your behavior and counters your strategy\n" +
  " Every game makes it smarter!\n" +
- " Challenge: Can you stay ahead of the learning curve?", 
- "AI Difficulty", 
- JOptionPane.DEFAULT_OPTION, 
- JOptionPane.QUESTION_MESSAGE, 
- null, 
- difficultyOptions, 
+ " Challenge: Can you stay ahead of the learning curve?",
+ "AI Difficulty",
+ JOptionPane.DEFAULT_OPTION,
+ JOptionPane.QUESTION_MESSAGE,
+ null,
+ difficultyOptions,
  difficultyOptions[0]);
  difficulty = (diffChoice >= 0) ? diffChoice + 1 : 1;
  }
