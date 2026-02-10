@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Pongus</title>
+  <script src="https://cjrtnc.leaningtech.com/3.0/cj3loader.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; background: black; overflow: hidden; }
+    #container { width: 100vw; height: 100vh; }
+    #loading {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      color: white; font-family: Arial; font-size: 24px; z-index: 10;
+      text-align: center;
+    }
+    #loading .subtitle {
+      font-size: 14px;
+      color: #888;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    Loading Pongus...
+    <div class="subtitle">Downloading Java runtime (first load may take a moment)</div>
+  </div>
+  <div id="container"></div>
+  <script>
+    // Prevent browser shortcuts from stealing game keys
+    window.addEventListener("keydown", function(e) {
+      if (["/", " ", "Tab", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+        e.preventDefault();
+      }
+    });
+
+    (async function() {
+      await cheerpjInit();
+      var loading = document.getElementById("loading");
+      loading.innerHTML = "Click to Play Pongus<div class='subtitle'>Click anywhere to start</div>";
+      loading.style.cursor = "pointer";
+      loading.onclick = async function() {
+        loading.style.display = "none";
+        cheerpjCreateDisplay(-1, -1, document.getElementById("container"));
+        await cheerpjRunJar("/app/PingPongGame.jar");
+      };
+    })();
+  </script>
+</body>
+</html>

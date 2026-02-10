@@ -7,24 +7,35 @@
 
 import java.awt.*;
 import java.awt.event.*;
+import java.awt.image.BufferedImage;
 import java.io.*;
 import java.util.ArrayList;
 import java.util.HashMap;
+import javax.imageio.ImageIO;
 import javax.swing.*;
 
-public class PingPongGame extends JPanel implements KeyListener, ActionListener {
+public class PingPongGame extends JPanel implements KeyListener, ActionListener, MouseListener {
+ // MAIN MENU STATE
+ boolean showingMainMenu = true;
+ int menuSelectedLevel = -1;
+ int menuAnimationTimer = 0;
+ int[] levelNodeX = new int[17];
+ int[] levelNodeY = new int[17];
+ Rectangle[] menuButtons = new Rectangle[]{new Rectangle(), new Rectangle(), new Rectangle(), new Rectangle()};
+ JFrame gameFrame;
+
  // ONLINE MULTIPLAYER
  boolean isOnlineGame = false;
  boolean isHost = false;
- NetworkClient networkClient = null;
+ Object networkClient = null; // TODO: NetworkClient class
  String serverUrl = "http://localhost:3000"; // Default local server
  int remotePaddleY = 100; // Opponent's paddle position
  int networkSendCounter = 0;
  int networkSendInterval = 3; // Send every 3 frames
 
- // PLAYER OBJECTS - encapsulate all player-specific state
- Player player1;
- Player player2;
+ // Player name strings (Player class not yet in compile path)
+ String player1Name = "Player 1";
+ String player2Name = "Player 2";
 
  int ballX = 250, ballY = 150, ballVelX = 2, ballVelY = 2;
  int initialBallVelX = 2, initialBallVelY = 2; // Store initial velocity for power-up restoration
@@ -134,6 +145,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int multiballDuration = 0, maxMultiballDuration = 500;
  boolean shrekBallActive = false;
  int shrekBallDuration = 0, maxShrekBallDuration = 1000, shrekJumpscareTimer = 0;
+ BufferedImage shrekSprite = null;
  
  // Permanent abilities
  HashMap<String, Integer> player1Abilities = new HashMap<>();
@@ -948,15 +960,46 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  return keyPressed[0];
  }
 
+ // Menu-mode constructor - opens directly to main menu
+ public PingPongGame() {
+ this.singlePlayer = true;
+ this.aiDifficulty = 1;
+
+ // Load story progress so the map shows correct state
+ loadStoryProgress();
+ initLevelNodePositions();
+ menuSelectedLevel = storyModeLevel - 1;
+
+ // Create window
+ JFrame frame = new JFrame("Pongus");
+ gameFrame = frame;
+ frame.setSize(600, 400);
+ frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+ frame.setResizable(true);
+ frame.add(this);
+ frame.addKeyListener(this);
+ this.addKeyListener(this);
+ this.addMouseListener(this);
+ setFocusable(true);
+ frame.setVisible(true);
+ requestFocusInWindow();
+
+ // Menu state - game paused, showing menu
+ showingMainMenu = true;
+ isPaused = true;
+
+ // Load shrek sprite
+ loadShrekSprite();
+
+ // Start timer for menu animations
+ timer = new javax.swing.Timer(10, this);
+ timer.start();
+ }
+
  public PingPongGame(boolean isSinglePlayer, int difficulty) {
  this.singlePlayer = isSinglePlayer;
  this.aiDifficulty = difficulty;
-
- // Initialize Player objects
- player1 = new Player(1, 10, 100);
- player2 = new Player(2, 580, 100);
- player1.name = "Player 1";
- player2.name = isSinglePlayer ? "AI" : "Player 2";
+ player2Name = isSinglePlayer ? "AI" : "Player 2";
 
  // Enable Learning AI for difficulty 4
  if (difficulty == 4) {
@@ -966,13 +1009,21 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Configure Keybinds
  configureKeybinds(isSinglePlayer);
  
- JFrame frame = new JFrame("Ping Pong Game");
+ JFrame frame = new JFrame("Pongus");
+ gameFrame = frame;
  frame.setSize(600, 400);
  frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
- frame.setResizable(true); // Allow window to be resized
+ frame.setResizable(true);
  frame.add(this);
  frame.addKeyListener(this);
+ this.addKeyListener(this);
+ this.addMouseListener(this);
+ setFocusable(true);
  frame.setVisible(true);
+ requestFocusInWindow();
+ showingMainMenu = false;
+ initLevelNodePositions();
+ loadShrekSprite();
  timer = new javax.swing.Timer(10, this);
  timer.start();
  spawnMapPowerUp();
@@ -1007,6 +1058,217 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  // Multiplayer removed: incoming data handler stripped
 
  // Multiplayer removed: outgoing data sender stripped
+
+ // ============== MAIN MENU FUNCTIONS ==============
+
+ void loadShrekSprite() {
+ try {
+  BufferedImage raw = null;
+
+  // Try classpath resource (inside JAR)
+  java.io.InputStream is = PingPongGame.class.getResourceAsStream("/assets/swek.png");
+  if (is == null) is = PingPongGame.class.getResourceAsStream("assets/swek.png");
+  if (is == null) is = PingPongGame.class.getResourceAsStream("/swek.png");
+  if (is == null) is = PingPongGame.class.getResourceAsStream("swek.png");
+  if (is != null) {
+  raw = ImageIO.read(is);
+  is.close();
+  }
+
+  // Try relative to JAR location
+  if (raw == null) {
+  try {
+   String jarPath = PingPongGame.class.getProtectionDomain().getCodeSource().getLocation().toURI().getPath();
+   File jarDir = new File(jarPath).getParentFile();
+   File f = new File(jarDir, "assets/swek.png");
+   if (f.exists()) raw = ImageIO.read(f);
+  } catch (Exception ignored) {}
+  }
+
+  // Try relative to CWD
+  if (raw == null) {
+  String[] paths = {"assets/swek.png", "swek.png"};
+  for (String path : paths) {
+   File f = new File(path);
+   if (f.exists()) { raw = ImageIO.read(f); break; }
+  }
+  }
+
+  if (raw != null) {
+  shrekSprite = raw;
+  }
+ } catch (Exception e) {
+  System.out.println("Could not load shrek sprite: " + e.getMessage());
+ }
+ }
+
+ void initLevelNodePositions() {
+ // Serpentine path: 5-4-4-4 nodes across 4 rows
+ // Row 1: Levels 1-5 (left to right)
+ int[] row1X = {70, 190, 300, 410, 530};
+ for (int i = 0; i < 5; i++) { levelNodeX[i] = row1X[i]; levelNodeY[i] = 70; }
+ // Row 2: Levels 6-9 (right to left)
+ int[] row2X = {530, 410, 300, 190};
+ for (int i = 0; i < 4; i++) { levelNodeX[5 + i] = row2X[i]; levelNodeY[5 + i] = 140; }
+ // Row 3: Levels 10-13 (left to right)
+ int[] row3X = {190, 300, 410, 530};
+ for (int i = 0; i < 4; i++) { levelNodeX[9 + i] = row3X[i]; levelNodeY[9 + i] = 210; }
+ // Row 4: Levels 14-17 (right to left)
+ int[] row4X = {530, 410, 300, 190};
+ for (int i = 0; i < 4; i++) { levelNodeX[13 + i] = row4X[i]; levelNodeY[13 + i] = 280; }
+ }
+
+ void drawMainMenu(Graphics2D g2d) {
+ // Background gradient
+ GradientPaint bg = new GradientPaint(0, 0, new Color(5, 10, 30), 0, 400, new Color(15, 25, 60));
+ g2d.setPaint(bg);
+ g2d.fillRect(0, 0, 600, 400);
+
+ // Starfield-like dots for ambiance
+ g2d.setColor(new Color(255, 255, 255, 30));
+ for (int i = 0; i < 50; i++) {
+  int sx = (i * 137 + 29) % 600;
+  int sy = (i * 97 + 13) % 310;
+  g2d.fillOval(sx, sy, 2, 2);
+ }
+
+ // Title
+ g2d.setFont(new Font("Arial", Font.BOLD, 36));
+ g2d.setColor(new Color(255, 215, 0));
+ String title = "PONGUS";
+ int titleWidth = g2d.getFontMetrics().stringWidth(title);
+ g2d.drawString(title, (600 - titleWidth) / 2, 38);
+
+ // Subtitle
+ g2d.setFont(new Font("Arial", Font.PLAIN, 12));
+ g2d.setColor(new Color(180, 180, 180));
+ String subtitle = "Story Progress: Level " + storyModeLevel + " / " + storyModeMaxLevel;
+ int subWidth = g2d.getFontMetrics().stringWidth(subtitle);
+ g2d.drawString(subtitle, (600 - subWidth) / 2, 52);
+
+ // Draw connecting lines between nodes (behind nodes)
+ g2d.setStroke(new BasicStroke(3, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+ for (int i = 0; i < storyModeMaxLevel - 1; i++) {
+  if (i < storyModeLevel - 1) {
+  g2d.setColor(new Color(100, 200, 100, 180)); // Green for completed path
+  } else if (i == storyModeLevel - 1) {
+  g2d.setColor(new Color(255, 215, 0, 150)); // Gold for current edge
+  } else {
+  g2d.setColor(new Color(60, 60, 60, 120)); // Dark for locked
+  }
+  g2d.drawLine(levelNodeX[i], levelNodeY[i], levelNodeX[i + 1], levelNodeY[i + 1]);
+ }
+ g2d.setStroke(new BasicStroke(1));
+
+ // Draw level nodes
+ for (int i = 0; i < storyModeMaxLevel; i++) {
+  int nx = levelNodeX[i];
+  int ny = levelNodeY[i];
+  int r = 14;
+
+  if (i < storyModeLevel - 1) {
+  // COMPLETED - green
+  g2d.setColor(new Color(50, 180, 50));
+  g2d.fillOval(nx - r, ny - r, r * 2, r * 2);
+  g2d.setColor(new Color(100, 255, 100));
+  g2d.drawOval(nx - r, ny - r, r * 2, r * 2);
+  g2d.setFont(new Font("Arial", Font.BOLD, 11));
+  g2d.setColor(Color.WHITE);
+  String num = String.valueOf(i + 1);
+  int nw = g2d.getFontMetrics().stringWidth(num);
+  g2d.drawString(num, nx - nw / 2, ny + 4);
+  } else if (i == storyModeLevel - 1) {
+  // CURRENT - pulsing gold glow
+  int pulse = (int)(Math.sin(menuAnimationTimer * 0.05) * 5 + 5);
+  g2d.setColor(new Color(255, 215, 0, 50));
+  g2d.fillOval(nx - r - pulse, ny - r - pulse, (r + pulse) * 2, (r + pulse) * 2);
+  g2d.setColor(new Color(255, 200, 0));
+  g2d.fillOval(nx - r, ny - r, r * 2, r * 2);
+  g2d.setColor(new Color(255, 255, 100));
+  g2d.drawOval(nx - r, ny - r, r * 2, r * 2);
+  g2d.setFont(new Font("Arial", Font.BOLD, 12));
+  g2d.setColor(Color.BLACK);
+  String num = String.valueOf(i + 1);
+  int nw = g2d.getFontMetrics().stringWidth(num);
+  g2d.drawString(num, nx - nw / 2, ny + 5);
+  } else {
+  // LOCKED - dark gray
+  g2d.setColor(new Color(50, 50, 50));
+  g2d.fillOval(nx - r, ny - r, r * 2, r * 2);
+  g2d.setColor(new Color(90, 90, 90));
+  g2d.drawOval(nx - r, ny - r, r * 2, r * 2);
+  g2d.setFont(new Font("Arial", Font.BOLD, 11));
+  g2d.setColor(new Color(100, 100, 100));
+  String num = String.valueOf(i + 1);
+  int nw = g2d.getFontMetrics().stringWidth(num);
+  g2d.drawString(num, nx - nw / 2, ny + 4);
+  }
+
+  // Selection highlight ring
+  if (i == menuSelectedLevel) {
+  g2d.setColor(new Color(255, 255, 255, 200));
+  g2d.setStroke(new BasicStroke(2));
+  g2d.drawOval(nx - r - 4, ny - r - 4, (r + 4) * 2, (r + 4) * 2);
+  g2d.setStroke(new BasicStroke(1));
+  }
+ }
+
+ // Boss name for selected level
+ if (menuSelectedLevel >= 0 && menuSelectedLevel < storyModeMaxLevel) {
+  g2d.setFont(new Font("Arial", Font.BOLD, 14));
+  String bossInfo = "Level " + (menuSelectedLevel + 1) + ": " + storyBossNames[menuSelectedLevel];
+  if (menuSelectedLevel < storyModeLevel - 1) {
+  g2d.setColor(new Color(100, 255, 100));
+  bossInfo += " [COMPLETE]";
+  } else if (menuSelectedLevel == storyModeLevel - 1) {
+  g2d.setColor(new Color(255, 215, 0));
+  bossInfo += " - Score " + storyLevelScoreToWin[menuSelectedLevel] + " to win!";
+  }
+  int infoW = g2d.getFontMetrics().stringWidth(bossInfo);
+  g2d.drawString(bossInfo, (600 - infoW) / 2, 310);
+ }
+
+ // Bottom button bar
+ String[] buttonLabels = {"Play Story", "1P", "2P", "Settings"};
+ int[] buttonWidths = {120, 60, 60, 90};
+ int totalBtnWidth = 120 + 60 + 60 + 90 + 30; // 3 gaps of 10px
+ int startX = (600 - totalBtnWidth) / 2;
+ int btnY = 340;
+ int btnH = 35;
+
+ for (int i = 0; i < 4; i++) {
+  int bx = startX;
+  int bw = buttonWidths[i];
+  menuButtons[i] = new Rectangle(bx, btnY, bw, btnH);
+
+  // Button background
+  Color btnColor;
+  if (i == 0) btnColor = new Color(160, 120, 0); // Gold for Play Story
+  else btnColor = new Color(40, 60, 120);
+  g2d.setColor(btnColor);
+  g2d.fillRoundRect(bx, btnY, bw, btnH, 8, 8);
+  g2d.setColor(new Color(255, 255, 255, 120));
+  g2d.drawRoundRect(bx, btnY, bw, btnH, 8, 8);
+
+  // Button text
+  g2d.setFont(new Font("Arial", Font.BOLD, 14));
+  g2d.setColor(Color.WHITE);
+  int textW = g2d.getFontMetrics().stringWidth(buttonLabels[i]);
+  g2d.drawString(buttonLabels[i], bx + (bw - textW) / 2, btnY + 23);
+
+  startX += bw + 10;
+ }
+
+ // Unlocked abilities at the very bottom
+ g2d.setFont(new Font("Arial", Font.PLAIN, 10));
+ g2d.setColor(new Color(150, 150, 150));
+ String abilities = (unlockedAbilities == null || unlockedAbilities.isEmpty()) ?
+  "No abilities unlocked yet - defeat bosses to earn them!" :
+  "Abilities: " + String.join(", ", unlockedAbilities);
+ if (abilities.length() > 90) abilities = abilities.substring(0, 87) + "...";
+ int abW = g2d.getFontMetrics().stringWidth(abilities);
+ g2d.drawString(abilities, (600 - abW) / 2, 393);
+ }
 
  // ============== STORY MODE FUNCTIONS ==============
 
@@ -1061,7 +1323,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  storyBossScore = 0;
 
  // Show the story map!
- showStoryMap();
+ returnToMainMenu();
  }
 
  void showStoryMap() {
@@ -1135,7 +1397,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int selectedIndex = levelList.getSelectedIndex();
  if (selectedIndex < 0 || selectedIndex >= storyModeLevel) {
  // Invalid selection, show map again
- showStoryMap();
+ returnToMainMenu();
  return;
  }
 
@@ -1357,9 +1619,9 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  "ALL ABILITIES UNLOCKED!\n\n" +
  "You are the TRUE PONGUS MASTER!",
  "STORY COMPLETE!", JOptionPane.INFORMATION_MESSAGE);
- showStoryMap();
+ returnToMainMenu();
  } else {
- showStoryMap();
+ returnToMainMenu();
  }
  }
 
@@ -1371,7 +1633,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  "Defeat!", JOptionPane.INFORMATION_MESSAGE);
  saveStoryProgress(); // Save progress
  // Return to map
- showStoryMap();
+ returnToMainMenu();
  }
 
  // ============== END STORY MODE FUNCTIONS ==============
@@ -2515,6 +2777,12 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  g2d.translate(translateX, translateY);
  g2d.scale(scale, scale);
 
+ // Main menu rendering
+ if (showingMainMenu) {
+ drawMainMenu(g2d);
+ return;
+ }
+
  // Apply mirror transform if active - flips entire game horizontally
  if (mirrorActive) {
  g2d.translate(600, 0); // Move to right edge
@@ -3329,9 +3597,52 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
 
  if (!ballHiddenByTunnel) {
+ if (shrekBallActive) {
+ // Draw shrek sprite with dance animation
+ int sx = ballX - 5;
+ int sy = ballY - 5;
+ int ss = 35;
+ double t = System.currentTimeMillis() / 100.0;
+ // Dance: wobble rotation + bounce + scale pulse
+ int bounceY = (int)(Math.abs(Math.sin(t * 1.5)) * 6);
+ double wobble = Math.sin(t * 2.0) * 0.3; // rotation in radians
+ double scalePulse = 1.0 + Math.sin(t * 3.0) * 0.15;
+ int danceSS = (int)(ss * scalePulse);
+ int cx = sx + ss / 2;
+ int cy = sy + ss / 2 - bounceY;
+ java.awt.geom.AffineTransform oldTransform = g2d.getTransform();
+ g2d.translate(cx, cy);
+ g2d.rotate(wobble);
+ if (shrekSprite != null) {
+  g2d.drawImage(shrekSprite, -danceSS / 2, -danceSS / 2, danceSS, danceSS, null);
+ }
+ g2d.setTransform(oldTransform);
+ if (shrekSprite == null) {
+  // Green shrek face fallback
+  g2d.setColor(new Color(80, 170, 50));
+  g2d.fillOval(sx, sy, ss, ss);
+  // Ears
+  g2d.setColor(new Color(70, 150, 40));
+  g2d.fillOval(sx - 3, sy + 2, 8, 8);
+  g2d.fillOval(sx + 20, sy + 2, 8, 8);
+  // Eyes
+  g2d.setColor(new Color(200, 180, 100));
+  g2d.fillOval(sx + 5, sy + 7, 6, 5);
+  g2d.fillOval(sx + 14, sy + 7, 6, 5);
+  g2d.setColor(Color.BLACK);
+  g2d.fillOval(sx + 7, sy + 9, 3, 3);
+  g2d.fillOval(sx + 16, sy + 9, 3, 3);
+  // Mouth
+  g2d.setColor(new Color(60, 130, 30));
+  g2d.setStroke(new BasicStroke(2));
+  g2d.drawArc(sx + 5, sy + 14, 15, 8, 200, 140);
+  g2d.setStroke(new BasicStroke(1));
+ }
+ } else {
  RadialGradientPaint ballGradient = new RadialGradientPaint(ballX + 7, ballY + 7, 10, new float[]{0.0f, 0.6f, 1.0f}, new Color[]{ballCenter, ballMid, ballOuter});
  g2d.setPaint(ballGradient);
  g2d.fillOval(ballX, ballY, 15, 15);
+ }
 
  // ARMAMENT HAKI - Draw dark aura around ball when phase is active
  if (player1HakiPhaseActive || player2HakiPhaseActive) {
@@ -4369,6 +4680,13 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int greenFlash = (int)(Math.sin(shrekJumpscareTimer * 0.8) * 100 + 155);
  g2d.setColor(new Color(0, greenFlash, 0, 200));
  g2d.fillRect(0, 0, 600, 400);
+ // Shrek face pop-up in center
+ if (shrekSprite != null) {
+  int imgSize = 200 + (int)(Math.sin(shrekJumpscareTimer * 0.6) * 30);
+  int imgX = 300 - imgSize / 2 + (int)(Math.random() * 20 - 10);
+  int imgY = 180 - imgSize / 2 + (int)(Math.random() * 20 - 10);
+  g2d.drawImage(shrekSprite, imgX, imgY, imgSize, imgSize, null);
+ }
  g2d.setFont(new Font("Arial", Font.BOLD, 90));
  g2d.setColor(new Color(0, 0, 0, 200));
  int shakeX = 102 + (int)(Math.random() * 15 - 7);
@@ -4564,6 +4882,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
 
  public void actionPerformed(ActionEvent e) {
+ if (showingMainMenu) {
+ menuAnimationTimer++;
+ repaint();
+ return;
+ }
  if (isPaused) return;
 
  // Online networking removed
@@ -6958,6 +7281,11 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  }
 
+ // Prevent ball from getting stuck going horizontally
+ if (Math.abs(ballVelY) < 1 && Math.abs(ballVelX) > 0) {
+ ballVelY = (Math.random() > 0.5) ? 2 : -2;
+ }
+
  // Ball movement
  int adjustedVelX = (int)(ballVelX * ballSpeedMultiplier);
  int adjustedVelY = (int)(ballVelY * ballSpeedMultiplier);
@@ -7409,7 +7737,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  
  // SET vertical velocity based on hit position
  ballVelY = (int)(normalizedOffset * maxDeflection);
- if (Math.abs(hitOffset) < paddleHeight1 * 0.1) ballVelY = 0;
+ if (Math.abs(hitOffset) < paddleHeight1 * 0.1) ballVelY = (Math.random() > 0.5) ? 1 : -1;
  
  // Add extra spin based on shadow movement
  if (player1ShadowMovingUp) ballVelY -= 2;
@@ -7453,7 +7781,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  
  // SET vertical velocity based on hit position
  ballVelY = (int)(normalizedOffset * maxDeflection);
- if (Math.abs(hitOffset) < paddleHeight1 * 0.1) ballVelY = 0;
+ if (Math.abs(hitOffset) < paddleHeight1 * 0.1) ballVelY = (Math.random() > 0.5) ? 1 : -1;
  
  // NORMALIZE SPEED: Keep total velocity constant
  double currentSpeed = Math.sqrt(ballVelX * ballVelX + ballVelY * ballVelY);
@@ -7502,7 +7830,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  
  // SET vertical velocity based on hit position
  ballVelY = (int)(normalizedOffset * maxDeflection);
- if (Math.abs(hitOffset) < paddleHeight2 * 0.1) ballVelY = 0;
+ if (Math.abs(hitOffset) < paddleHeight2 * 0.1) ballVelY = (Math.random() > 0.5) ? 1 : -1;
  
  // Add extra spin based on shadow movement
  if (player2ShadowMovingUp) ballVelY -= 2;
@@ -7546,7 +7874,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  
  // SET vertical velocity based on hit position
  ballVelY = (int)(normalizedOffset * maxDeflection);
- if (Math.abs(hitOffset) < paddleHeight2 * 0.1) ballVelY = 0;
+ if (Math.abs(hitOffset) < paddleHeight2 * 0.1) ballVelY = (Math.random() > 0.5) ? 1 : -1;
  
  // NORMALIZE SPEED: Keep total velocity constant
  double currentSpeed = Math.sqrt(ballVelX * ballVelX + ballVelY * ballVelY);
@@ -7633,6 +7961,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  ballVelX = (int)(Math.cos(angle) * speed);
  ballVelY = (int)(Math.sin(angle) * speed);
  if (Math.abs(ballVelX) < 3) ballVelX = ballVelX >= 0 ? 3 : -3;
+ if (ballVelY == 0) ballVelY = (Math.random() > 0.5) ? 2 : -2;
  } else {
  // Base trap - stun + redirect ball TOWARD opponent's side!
  if (player2StunImmunityTimer == 0) player2StunTimer = 120; // 1.2s stun
@@ -7640,6 +7969,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int speed = Math.max(5, (int)Math.sqrt(ballVelX*ballVelX + ballVelY*ballVelY));
  ballVelX = Math.abs(speed); // Force ball right toward opponent
  ballVelY = (int)((Math.random() - 0.5) * speed); // Randomize vertical slightly
+ if (ballVelY == 0) ballVelY = (Math.random() > 0.5) ? 2 : -2;
  }
  player1TrapActive = false; // Trap triggers once
  }
@@ -7667,6 +7997,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  ballVelX = (int)(Math.cos(angle) * speed);
  ballVelY = (int)(Math.sin(angle) * speed);
  if (Math.abs(ballVelX) < 3) ballVelX = ballVelX >= 0 ? 3 : -3;
+ if (ballVelY == 0) ballVelY = (Math.random() > 0.5) ? 2 : -2;
  } else {
  // Base trap - stun + redirect ball TOWARD opponent's side!
  if (player1StunImmunityTimer == 0) player1StunTimer = 120; // 1.2s stun
@@ -7674,6 +8005,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  int speed = Math.max(5, (int)Math.sqrt(ballVelX*ballVelX + ballVelY*ballVelY));
  ballVelX = -Math.abs(speed); // Force ball left toward opponent
  ballVelY = (int)((Math.random() - 0.5) * speed); // Randomize vertical slightly
+ if (ballVelY == 0) ballVelY = (Math.random() > 0.5) ? 2 : -2;
  }
  player2TrapActive = false;
  }
@@ -7728,6 +8060,8 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  ballVelX = -(int)((ballVelX / magnitude) * ballSpeed);  // Negate to reverse direction
  ballVelY = (int)((ballVelY / magnitude) * ballSpeed);
  }
+ // Prevent perfectly horizontal ball
+ if (ballVelY == 0) ballVelY = (Math.random() > 0.5) ? 2 : -2;
  ballX = 20;
  
  
@@ -7867,6 +8201,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  ballVelX = -(int)((ballVelX / magnitude) * ballSpeed);
  ballVelY = (int)((ballVelY / magnitude) * ballSpeed);
  }
+ if (ballVelY == 0) ballVelY = (Math.random() > 0.5) ? 2 : -2;
  ballX = 565;
  
  // DASH SPEED BOOST - If player just dashed, double the ball speed!
@@ -8713,8 +9048,8 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  String type;
  if (rand < 0.000001) type = "jackpot";
  else if (rand < 0.001) type = "multiball";
- else if (rand < 0.002) type = "shrek";
- else if (rand < 0.05) type = "giant";
+ else if (rand < 0.05) type = "shrek";
+ else if (rand < 0.10) type = "giant";
  else if (rand < 0.15) type = "shrink";
  else if (rand < 0.25) {
  String[] mapPowerUps = {"dangerzone", "gravity", "invisiblewalls", "shrinkpaddles", "centerwall"};
@@ -8791,6 +9126,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  ballY = 50 + (int)(Math.random() * 300);
  ballVelX = (Math.random() < 0.5 ? -1 : 1) * (3 + (int)(Math.random() * 3));
  ballVelY = (int)(Math.random() * 6) - 3;
+ if (ballVelY == 0) ballVelY = (Math.random() > 0.5) ? 2 : -2;
  teleportActive = true;
  teleportDuration = 0;
  break;
@@ -8806,6 +9142,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  ballVelX = (int)((ballVelX / magnitude) * ballSpeed);
  ballVelY = (int)((ballVelY / magnitude) * ballSpeed);
  }
+ if (ballVelY == 0) ballVelY = (Math.random() > 0.5) ? 2 : -2;
 
  fireballActive = true;
  fireballDuration = 0;
@@ -8937,6 +9274,7 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
 
  public void keyPressed(KeyEvent e) {
  int code = e.getKeyCode();
+ if (showingMainMenu) return; // Ignore keys while menu is showing
  if (code == KeyEvent.VK_P || code == KeyEvent.VK_ESCAPE) {
  isPaused = !isPaused;
  repaint();
@@ -9917,6 +10255,154 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
 
  public void keyTyped(KeyEvent e) {}
 
+ // ============== MOUSE LISTENER (for main menu) ==============
+
+ public void mouseClicked(MouseEvent e) {
+ if (!showingMainMenu) return;
+
+ // Convert screen coordinates to virtual 600x400 coordinates
+ double scaleX = getWidth() / 600.0;
+ double scaleY = getHeight() / 400.0;
+ double scale = Math.min(scaleX, scaleY);
+ double translateX = (getWidth() - 600 * scale) / 2;
+ double translateY = (getHeight() - 400 * scale) / 2;
+ int vx = (int)((e.getX() - translateX) / scale);
+ int vy = (int)((e.getY() - translateY) / scale);
+
+ // Check level nodes (click within 18px radius)
+ for (int i = 0; i < storyModeMaxLevel; i++) {
+  int dx = vx - levelNodeX[i];
+  int dy = vy - levelNodeY[i];
+  if (dx * dx + dy * dy < 18 * 18) {
+  // Only allow selecting completed or current levels
+  if (i < storyModeLevel) {
+   menuSelectedLevel = i;
+   repaint();
+  }
+  return;
+  }
+ }
+
+ // Check bottom buttons
+ for (int i = 0; i < menuButtons.length; i++) {
+  if (menuButtons[i] != null && menuButtons[i].contains(vx, vy)) {
+  handleMenuButtonClick(i);
+  return;
+  }
+ }
+ }
+
+ public void mousePressed(MouseEvent e) {}
+ public void mouseReleased(MouseEvent e) {}
+ public void mouseEntered(MouseEvent e) {}
+ public void mouseExited(MouseEvent e) {}
+
+ void handleMenuButtonClick(int buttonIndex) {
+ switch (buttonIndex) {
+  case 0: startStoryFromMenu(); break;
+  case 1: startSinglePlayerFromMenu(); break;
+  case 2: startMultiplayerFromMenu(); break;
+  case 3: showSettingsFromMenu(); break;
+ }
+ }
+
+ void startStoryFromMenu() {
+ int selected = (menuSelectedLevel >= 0) ? menuSelectedLevel : storyModeLevel - 1;
+ storyModeLevel = selected + 1;
+ storyModeActive = true;
+ storyPlayerScore = 0;
+ storyBossScore = 0;
+
+ // Show level intro
+ String currentBoss = storyBossNames[selected];
+ int scoreNeeded = storyLevelScoreToWin[selected];
+ JOptionPane.showMessageDialog(gameFrame,
+  "=== LEVEL " + (selected + 1) + " ===\n\n" +
+  "BOSS: " + currentBoss + "\n" +
+  "Score " + scoreNeeded + " points to win!\n\n" +
+  "Get ready!",
+  "Battle Start!", JOptionPane.INFORMATION_MESSAGE);
+
+ startStoryLevel();
+ showingMainMenu = false;
+ isPaused = false;
+ requestFocusInWindow();
+ }
+
+ void startSinglePlayerFromMenu() {
+ String[] difficultyOptions = {"Normal", "Hard", "Impossible", "Learning AI"};
+ int diffChoice = JOptionPane.showOptionDialog(gameFrame,
+  "Choose AI Difficulty:",
+  "AI Difficulty", JOptionPane.DEFAULT_OPTION,
+  JOptionPane.QUESTION_MESSAGE, null, difficultyOptions, difficultyOptions[0]);
+ if (diffChoice < 0) return; // Cancelled
+
+ aiDifficulty = diffChoice + 1;
+ singlePlayer = true;
+ storyModeActive = false;
+ learningAIEnabled = (aiDifficulty == 4);
+ player2Name = "AI";
+
+ resetGameState();
+ showingMainMenu = false;
+ isPaused = false;
+ requestFocusInWindow();
+ spawnMapPowerUp();
+ }
+
+ void startMultiplayerFromMenu() {
+ singlePlayer = false;
+ storyModeActive = false;
+ aiDifficulty = 1;
+ learningAIEnabled = false;
+ player2Name = "Player 2";
+
+ resetGameState();
+ showingMainMenu = false;
+ isPaused = false;
+ requestFocusInWindow();
+ spawnMapPowerUp();
+ }
+
+ void showSettingsFromMenu() {
+ configureKeybinds(singlePlayer);
+ }
+
+ void returnToMainMenu() {
+ showingMainMenu = true;
+ isPaused = true;
+ storyModeActive = false;
+ loadStoryProgress();
+ menuSelectedLevel = storyModeLevel - 1;
+ menuAnimationTimer = 0;
+ repaint();
+ }
+
+ void resetGameState() {
+ scorePlayer1 = 0;
+ scorePlayer2 = 0;
+ level1 = 1;
+ level2 = 1;
+ pointsToNextLevel1 = 1;
+ pointsToNextLevel2 = 1;
+ totalPointsThisLevel1 = 0;
+ totalPointsThisLevel2 = 0;
+ ballX = 250; ballY = 150;
+ ballVelX = 2; ballVelY = 2;
+ initialBallVelX = 2; initialBallVelY = 2;
+ ballSpeed = 3.0;
+ paddle1Y = 100; paddle2Y = 100;
+ player1Abilities.clear();
+ player2Abilities.clear();
+ player1AbilityBranches.clear();
+ player2AbilityBranches.clear();
+ powerUps.clear();
+ bullets.clear();
+ explosions.clear();
+ noScoreTimer = 0;
+ ballNotHitTimer = 0;
+ }
+
  // Save game state to file
  private void saveGame() {
  // Ask for save name
@@ -10228,182 +10714,25 @@ public class PingPongGame extends JPanel implements KeyListener, ActionListener 
  }
  }
 
- // ============== ONLINE MULTIPLAYER ==============
+ // ============== ONLINE MULTIPLAYER (disabled - NetworkClient not implemented) ==============
 
  static void startOnlineMultiplayer() {
- // Get server URL
- String defaultUrl = "http://localhost:3000";
- String serverUrl = JOptionPane.showInputDialog(null,
- "Enter server URL:\n\n" +
- "(Leave default for local testing)",
- defaultUrl);
-
- if (serverUrl == null || serverUrl.trim().isEmpty()) {
- return; // User cancelled
- }
-
- // Get player name
- String playerName = JOptionPane.showInputDialog(null,
- "Enter your name:",
- "Player");
-
- if (playerName == null || playerName.trim().isEmpty()) {
- playerName = "Player";
- }
-
- // Create game instance
- final PingPongGame game = new PingPongGame(false, 1);
- game.isOnlineGame = true;
- game.singlePlayer = false;
- game.serverUrl = serverUrl.trim();
-
- // Create network client
- game.networkClient = new NetworkClient(serverUrl.trim());
-
- final String finalPlayerName = playerName.trim();
-
- // Set up callbacks
- game.networkClient.setOnConnected(() -> {
- System.out.println("Connected to server!");
- });
-
- game.networkClient.setOnMatchFound(gameId -> {
- System.out.println("Match found! Game ID: " + gameId);
- });
-
- game.networkClient.setOnGameReady(() -> {
- game.isHost = game.networkClient.isHost();
- System.out.println("Game ready! I am " + (game.isHost ? "HOST" : "CLIENT"));
- game.isPaused = false;
- });
-
- game.networkClient.setOnPlayerInput(input -> {
- // Received input from opponent
- if (input.containsKey("gameState")) {
- // We're the client - apply host's game state
- if (input.containsKey("ballX")) game.ballX = Integer.parseInt(input.get("ballX"));
- if (input.containsKey("ballY")) game.ballY = Integer.parseInt(input.get("ballY"));
- if (input.containsKey("ballVelX")) game.ballVelX = Integer.parseInt(input.get("ballVelX"));
- if (input.containsKey("ballVelY")) game.ballVelY = Integer.parseInt(input.get("ballVelY"));
- if (input.containsKey("paddle1Y")) game.paddle1Y = Integer.parseInt(input.get("paddle1Y"));
- if (input.containsKey("score1")) game.player1.score = Integer.parseInt(input.get("score1"));
- if (input.containsKey("score2")) game.player2.score = Integer.parseInt(input.get("score2"));
- } else if (input.containsKey("paddleY")) {
- // We're the host - apply opponent's paddle position
- game.remotePaddleY = Integer.parseInt(input.get("paddleY"));
- }
- });
-
- game.networkClient.setOnPlayerDisconnected(name -> {
- JOptionPane.showMessageDialog(null, name + " disconnected!", "Opponent Left", JOptionPane.WARNING_MESSAGE);
- game.isPaused = true;
- });
-
- game.networkClient.setOnError(error -> {
- JOptionPane.showMessageDialog(null, "Connection error: " + error, "Error", JOptionPane.ERROR_MESSAGE);
- });
-
- game.networkClient.setOnWaiting(msg -> {
- System.out.println(msg);
- });
-
- // Show connecting message
- JOptionPane.showMessageDialog(null, "Connecting to server...\nLooking for opponent...", "Quick Match", JOptionPane.INFORMATION_MESSAGE);
-
- // Connect and start quick match
- game.networkClient.connect().thenAccept(v -> {
- game.networkClient.joinQuickMatch(finalPlayerName);
- }).exceptionally(ex -> {
- JOptionPane.showMessageDialog(null, "Failed to connect: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
- return null;
- });
+ JOptionPane.showMessageDialog(null, "Online multiplayer is not yet available.", "Coming Soon", JOptionPane.INFORMATION_MESSAGE);
  }
 
  void sendOnlineGameState() {
- if (!isOnlineGame || networkClient == null || !networkClient.isInGame()) return;
-
- networkSendCounter++;
- if (networkSendCounter < networkSendInterval) return;
- networkSendCounter = 0;
-
- if (isHost) {
- // Host sends full game state
- networkClient.sendGameState(ballX, ballY, ballVelX, ballVelY,
- paddle1Y, paddle2Y, player1.score, player2.score);
- } else {
- // Client sends only their paddle position
- networkClient.sendPaddlePosition(paddle2Y);
- }
+ // Disabled - NetworkClient not implemented
  }
 
  void applyOnlineInput() {
  if (!isOnlineGame) return;
-
- if (isHost) {
- // Host applies remote player's paddle position to paddle2
- paddle2Y = remotePaddleY;
- }
- // Client gets full state from host via callback
+ if (isHost) paddle2Y = remotePaddleY;
  }
 
  // ============== END ONLINE MULTIPLAYER ==============
 
  public static void main(String[] args) {
- String[] options = {"1 Player", "2 Players (Local)", "ONLINE MULTIPLAYER", "STORY MODE"};
- int choice = JOptionPane.showOptionDialog(null,
- "Choose Game Mode:\n\n" +
- "1 Player: Classic mode vs AI\n" +
- "2 Players: Local multiplayer\n" +
- "ONLINE MULTIPLAYER: Play against others online!\n" +
- "STORY MODE: Unlock abilities by defeating bosses!",
- "Ping Pong", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
-
- int difficulty = 1; // Default to Normal
-
- if (choice == 2) {
- // ONLINE MULTIPLAYER
- startOnlineMultiplayer();
- return;
- }
-
- if (choice == 3) {
- // STORY MODE
- PingPongGame game = new PingPongGame(true, 1);
- game.initializeStoryMode();
- return;
- }
-
- if (choice == 0) { // Single player - ask for difficulty
- String[] difficultyOptions = {"Normal", "Hard", "Impossible", "Learning AI"};
- int diffChoice = JOptionPane.showOptionDialog(null,
- "Choose AI Difficulty:\n\n" +
- "Normal: Standard AI - Good challenge\n\n" +
- "Hard: Faster and smarter AI with prediction\n\n" +
- "Impossible: BRUTAL AI\n" +
- " 150% faster movement\n" +
- " Perfect ball trajectory calculation\n" +
- " Pixel-perfect positioning\n" +
- " Strategic power-up hunting\n" +
- " Starts with Speed Boost + Bigger Paddle\n" +
- " Warning: Extremely difficult!\n\n" +
- "Learning AI: ADAPTIVE AI\n" +
- " Starts weak but learns YOUR play style!\n" +
- " Adapts to your speed, positioning, and tactics\n" +
- " Gets progressively stronger as it learns\n" +
- " Mimics your behavior and counters your strategy\n" +
- " Every game makes it smarter!\n" +
- " Challenge: Can you stay ahead of the learning curve?",
- "AI Difficulty",
- JOptionPane.DEFAULT_OPTION,
- JOptionPane.QUESTION_MESSAGE,
- null,
- difficultyOptions,
- difficultyOptions[0]);
- difficulty = (diffChoice >= 0) ? diffChoice + 1 : 1;
- }
-
- // Online multiplayer removed; fall back to single/local play
- new PingPongGame(choice == 0, difficulty);
+ new PingPongGame(); // Open directly to main menu
  }
 }
 
