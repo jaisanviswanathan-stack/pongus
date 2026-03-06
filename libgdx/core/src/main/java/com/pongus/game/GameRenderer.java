@@ -1,5 +1,7 @@
 package com.pongus.game;
 
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
@@ -14,7 +16,7 @@ import static com.pongus.game.Colors.*;
  */
 public class GameRenderer {
     private final GameWorld w;
-    private final AbilityManager abilityManager;
+    final AbilityManager abilityManager;
 
     // === CLASH ROYALE STYLE MENU LAYOUT (600x400 canvas, Y-down) ===
     static final int CR_TOPBAR_H  = 34;   // top status bar
@@ -141,6 +143,7 @@ public class GameRenderer {
         drawMatchTimerBg();
 
         drawBlindOverlay();
+        drawAbilityButtonShapes();
 
         w.sr.end();
 
@@ -156,6 +159,7 @@ public class GameRenderer {
 
         drawScores();
         drawAbilityLists();
+        drawAbilityButtonText();
         drawStatusIndicatorsText();
         drawCooldownTimers();
         drawSynergyBanner();
@@ -177,6 +181,14 @@ public class GameRenderer {
         drawPowerUpSprites();
 
         w.batch.end();
+
+        // Blind overlay drawn again after all sprites so it covers paddle textures too
+        if (w.player1BlindLevel > 0 || w.player2BlindLevel > 0) {
+            w.sr.setProjectionMatrix(w.camera.combined);
+            w.sr.begin(ShapeRenderer.ShapeType.Filled);
+            drawBlindOverlay();
+            w.sr.end();
+        }
 
         // Slide deck overlay (self-contained shape + text passes, always last)
         renderSlideDeck();
@@ -251,6 +263,67 @@ public class GameRenderer {
         w.font.setColor(Colors.c(120, 120, 140));
         w.font.draw(w.batch, "ESC to close", 510, 395);
         w.batch.end();
+    }
+
+    /** Ability button backgrounds (called in Filled shape pass of renderGameplay). */
+    void drawAbilityButtonShapes() {
+        if (w.isPaused || w.showingCountdown) return;
+        if (!Gdx.input.isPeripheralAvailable(Input.Peripheral.MultitouchScreen)) return;
+        int btnW = 80, btnH = 24, btnGap = 3, bottomY = 394;
+        // P1 buttons — one per key-press ability drawn, stacked upward from bottom-left
+        int slot = 0;
+        for (int i = 0; i < w.player1DrawnCards.size() && slot < 4; i++) {
+            if (!abilityManager.needsKeyPress(w.player1DrawnCards.get(i))) continue;
+            int by = bottomY - (slot + 1) * btnH - slot * btnGap;
+            w.sr.setColor(slot == 0 ? Colors.c(0, 200, 240, 170) : Colors.c(0, 130, 170, 110));
+            fillRoundRect(5, by, btnW, btnH, 5);
+            slot++;
+        }
+        // P2 buttons — only in 2P local mode
+        if (!w.singlePlayer) {
+            slot = 0;
+            for (int i = 0; i < w.player2DrawnCards.size() && slot < 4; i++) {
+                if (!abilityManager.needsKeyPress(w.player2DrawnCards.get(i))) continue;
+                int by = bottomY - (slot + 1) * btnH - slot * btnGap;
+                w.sr.setColor(slot == 0 ? Colors.c(240, 80, 60, 170) : Colors.c(170, 50, 40, 110));
+                fillRoundRect(515, by, btnW, btnH, 5);
+                slot++;
+            }
+        }
+    }
+
+    /** Ability button labels (called in SpriteBatch pass of renderGameplay). */
+    void drawAbilityButtonText() {
+        if (w.isPaused || w.showingCountdown) return;
+        if (!Gdx.input.isPeripheralAvailable(Input.Peripheral.MultitouchScreen)) return;
+        int btnW = 80, btnH = 24, btnGap = 3, bottomY = 394;
+        w.font.getData().setScale(0.75f, -0.75f);
+        // P1 buttons
+        int slot = 0;
+        for (int i = 0; i < w.player1DrawnCards.size() && slot < 4; i++) {
+            if (!abilityManager.needsKeyPress(w.player1DrawnCards.get(i))) continue;
+            int by = bottomY - (slot + 1) * btnH - slot * btnGap;
+            String name = abilityManager.getShortName(w.player1DrawnCards.get(i));
+            w.font.setColor(slot == 0 ? Colors.c(180, 240, 255) : Colors.c(120, 190, 210, 180));
+            w.glyphLayout.setText(w.font, name);
+            w.font.draw(w.batch, name, 5 + btnW / 2 - w.glyphLayout.width / 2, by + btnH / 2 + 5);
+            slot++;
+        }
+        // P2 buttons (2P only)
+        if (!w.singlePlayer) {
+            slot = 0;
+            for (int i = 0; i < w.player2DrawnCards.size() && slot < 4; i++) {
+                if (!abilityManager.needsKeyPress(w.player2DrawnCards.get(i))) continue;
+                int by = bottomY - (slot + 1) * btnH - slot * btnGap;
+                String name = abilityManager.getShortName(w.player2DrawnCards.get(i));
+                w.font.setColor(slot == 0 ? Colors.c(255, 180, 160) : Colors.c(210, 130, 110, 180));
+                w.glyphLayout.setText(w.font, name);
+                w.font.draw(w.batch, name, 515 + btnW / 2 - w.glyphLayout.width / 2, by + btnH / 2 + 5);
+                slot++;
+            }
+        }
+        w.font.getData().setScale(1f, -1f);
+        w.font.setColor(Color.WHITE);
     }
 
     /** Pre-match countdown overlay (3, 2, 1, GO!) shown on top of the gameplay background. */
@@ -394,6 +467,68 @@ public class GameRenderer {
         w.font.draw(w.batch, countStr, 300 - w.glyphLayout.width / 2, 350);
 
         // Reset font
+        w.font.getData().setScale(1f, -1f);
+        w.font.setColor(Color.WHITE);
+        w.batch.end();
+    }
+
+    /** Renders the matchmaking "Finding opponent..." screen. */
+    void renderMatchmaking() {
+        // === SHAPE PASS ===
+        w.sr.setProjectionMatrix(w.camera.combined);
+        w.sr.begin(ShapeRenderer.ShapeType.Filled);
+
+        // Background
+        w.sr.setColor(Colors.c(4, 8, 28, 255));
+        w.sr.rect(0, 0, 600, 400);
+
+        // Pulsing centre panel
+        float pulse = (float)(Math.sin(w.elapsedTime * 3.0) * 0.5 + 0.5);
+        w.sr.setColor(Colors.c(10, 22, 70, 220));
+        fillRoundRect(150, 140, 300, 120, 12);
+
+        // Animated spinner dots (3 dots cycling alpha)
+        float t = w.elapsedTime * 2.5f;
+        for (int i = 0; i < 3; i++) {
+            float phase = (t - i * 0.4f) % 3.0f;
+            float alpha = (phase < 1f) ? phase : (phase < 2f) ? 1f : Math.max(0f, 3f - phase);
+            w.sr.setColor(Colors.c(80, 160, 255, (int)(alpha * 200)));
+            w.sr.circle(270 + i * 30, 230, 6);
+        }
+
+        // Progress bar (8-second countdown)
+        float progress = Math.min(1f, w.matchmakingTimer / 8f);
+        w.sr.setColor(Colors.c(30, 50, 100, 180));
+        w.sr.rect(160, 245, 280, 6);
+        if (progress > 0.75f)     w.sr.setColor(Colors.c(255, 80, 60, 200));
+        else if (progress > 0.4f) w.sr.setColor(Colors.c(255, 200, 50, 200));
+        else                      w.sr.setColor(Colors.c(60, 180, 255, 200));
+        w.sr.rect(160, 245, 280 * progress, 6);
+
+        w.sr.end();
+
+        // === TEXT PASS ===
+        w.batch.setProjectionMatrix(w.camera.combined);
+        w.batch.begin();
+
+        // "FINDING OPPONENT" header
+        w.font.setColor(Color.WHITE);
+        w.font.getData().setScale(1.3f, -1.3f);
+        w.glyphLayout.setText(w.font, "FINDING OPPONENT");
+        w.font.draw(w.batch, "FINDING OPPONENT", 300 - w.glyphLayout.width / 2, 175);
+
+        // Searching sub-text
+        w.font.getData().setScale(0.85f, -0.85f);
+        w.font.setColor(Colors.c(140, 180, 220));
+        w.glyphLayout.setText(w.font, "Looking for a match...");
+        w.font.draw(w.batch, "Looking for a match...", 300 - w.glyphLayout.width / 2, 215);
+
+        // Cancel hint
+        w.font.getData().setScale(0.75f, -0.75f);
+        w.font.setColor(Colors.c(100, 110, 130));
+        w.glyphLayout.setText(w.font, "Tap anywhere to cancel");
+        w.font.draw(w.batch, "Tap anywhere to cancel", 300 - w.glyphLayout.width / 2, 300);
+
         w.font.getData().setScale(1f, -1f);
         w.font.setColor(Color.WHITE);
         w.batch.end();
@@ -548,13 +683,12 @@ public class GameRenderer {
         w.glyphLayout.setText(w.font, trophyStr);
         w.font.draw(w.batch, trophyStr, 292, 22); // right of trophy icon at x=280
 
-        w.font.setColor(c(180, 180, 180));
-        ArenaConfig.Arena arena = (w.profile != null)
-            ? ArenaConfig.getArenaForTrophies(w.profile.trophies)
-            : ArenaConfig.getArena(0);
-        String arenaNameWithHint = arena.name + " >";
-        w.glyphLayout.setText(w.font, arenaNameWithHint);
-        w.font.draw(w.batch, arenaNameWithHint, GameWorld.VIRTUAL_WIDTH - w.glyphLayout.width - 8, 22);
+        // Username — right-aligned in top bar
+        String topBarName = (w.profile != null && w.profile.username != null && !w.profile.username.isEmpty())
+            ? w.profile.username : "Player";
+        w.font.setColor(Color.WHITE);
+        w.glyphLayout.setText(w.font, topBarName);
+        w.font.draw(w.batch, topBarName, GameWorld.VIRTUAL_WIDTH - w.glyphLayout.width - 8, 22);
 
         // Gold display
         w.font.setColor(Colors.c(255, 210, 40));
@@ -594,8 +728,9 @@ public class GameRenderer {
         w.font.draw(w.batch, "BATTLE!",
             battleX2 + (CR_BATTLE_W - w.glyphLayout.width) / 2, CR_BATTLE_Y + 26);
 
-        // --- CHEST SLOTS text ---
+        // --- CHEST SLOTS text + sprites ---
         int[] chestX2 = {169, 237, 305, 373};
+        String[] chestTypeOrder = {"silver", "gold", "magical", "arena"};
         for (int i = 0; i < 4; i++) {
             String chestType = (w.profile != null) ? w.profile.chestSlots[i].type : null;
             if (chestType == null) {
@@ -604,21 +739,25 @@ public class GameRenderer {
                 w.font.draw(w.batch, "Empty",
                     chestX2[i] + (CR_CHEST_W - w.glyphLayout.width) / 2, CR_CHEST_Y + 36);
             } else {
+                // Draw chest sprite if available, otherwise fall back to text label
+                int chestIdx = -1;
+                for (int ci = 0; ci < chestTypeOrder.length; ci++) {
+                    if (chestTypeOrder[ci].equals(chestType)) { chestIdx = ci; break; }
+                }
+                if (chestIdx >= 0 && chestIdx < w.texChests.length && w.texChests[chestIdx] != null) {
+                    int sw = CR_CHEST_W - 4, sh = CR_CHEST_H - 4;
+                    int sx = chestX2[i] + 2;
+                    // Draw flipped vertically (Y-down camera causes textures to appear upside-down)
+                    w.batch.draw(w.texChests[chestIdx], sx, CR_CHEST_Y + 2 + sh, sw, -sh);
+                }
                 String timeStr = ChestSystem.getChestTimeRemaining(w.profile.chestSlots[i]);
                 boolean ready = "Ready!".equals(timeStr);
+                w.font.getData().setScale(0.75f, -0.75f);
                 w.font.setColor(ready ? CLR_GREEN_BRIGHT : Color.WHITE);
-                w.glyphLayout.setText(w.font, ChestSystem.getChestDisplayName(chestType));
-                // Draw chest name (may need to shorten for width)
-                String displayName = chestType.equals("magical") ? "Magic" :
-                                     chestType.equals("silver") ? "Silver" :
-                                     chestType.equals("gold") ? "Gold" : "Arena";
-                w.glyphLayout.setText(w.font, displayName);
-                w.font.draw(w.batch, displayName,
-                    chestX2[i] + (CR_CHEST_W - w.glyphLayout.width) / 2, CR_CHEST_Y + 26);
-                w.font.setColor(ready ? CLR_GREEN_BRIGHT : c(200, 200, 200));
                 w.glyphLayout.setText(w.font, timeStr);
                 w.font.draw(w.batch, timeStr,
-                    chestX2[i] + (CR_CHEST_W - w.glyphLayout.width) / 2, CR_CHEST_Y + 46);
+                    chestX2[i] + (CR_CHEST_W - w.glyphLayout.width) / 2, CR_CHEST_Y + 62);
+                w.font.getData().setScale(1f, -1f);
             }
         }
 
@@ -636,6 +775,9 @@ public class GameRenderer {
 
 
         w.batch.end();
+
+        // Slide deck overlay — must be last so it renders on top of the main menu
+        renderSlideDeck();
     }
 
     /** Check if a virtual-coordinate click hits a CR menu element.
@@ -960,22 +1102,24 @@ public class GameRenderer {
                 w.tmpColor.set(150/255f, 0f, 200/255f, 1f);
                 w.sr.setColor(w.tmpColor);
                 w.sr.rect(20, w.paddle1Y + 2, 2, p1H - 4);
+            } else if (w.texPaddle1 != null) {
+                // Custom sprite — no shape drawn, sprite handles all visuals in batch pass
             } else {
                 if (elastic1Active) {
                     // Elastic: bright green outer flash
                     w.sr.setColor(CLR_SPRING_GREEN);
                     w.sr.rect(4, w.paddle1Y - 4, 18, p1H + 8);
                 }
-                // Glow: wider plain rect, low alpha (no rounded corners — they look pill-shaped)
+                // Glow
                 w.tmpColor.set(0f, 180/255f, 255/255f, 50/255f);
                 w.sr.setColor(w.tmpColor);
-                w.sr.rect(5, w.paddle1Y - 2, 16, p1H + 4);
-                // Core: opaque solid rect — clean paddle shape
+                w.sr.rect(0, w.paddle1Y - 2, 36, p1H + 4);
+                // Core
                 w.sr.setColor(CLR_SKY_BLUE);
-                w.sr.rect(10, w.paddle1Y, 10, p1H);
+                w.sr.rect(0, w.paddle1Y, 32, p1H);
                 // Ball-facing bright edge (right side, 2px)
                 w.sr.setColor(CLR_CYAN);
-                w.sr.rect(20, w.paddle1Y, 2, p1H);
+                w.sr.rect(32, w.paddle1Y, 2, p1H);
             }
         }
 
@@ -992,6 +1136,8 @@ public class GameRenderer {
                 w.tmpColor.set(150/255f, 0f, 200/255f, 1f);
                 w.sr.setColor(w.tmpColor);
                 w.sr.rect(578, w.paddle2Y + 2, 2, p2H - 4);
+            } else if (w.texPaddle2 != null) {
+                // Custom sprite — no shape drawn, sprite handles all visuals in batch pass
             } else {
                 if (elastic2Active) {
                     // Elastic: bright orange outer flash
@@ -999,17 +1145,17 @@ public class GameRenderer {
                     w.sr.setColor(w.tmpColor);
                     w.sr.rect(578, w.paddle2Y - 4, 18, p2H + 8);
                 }
-                // Glow: wider plain rect, low alpha
+                // Glow
                 w.tmpColor.set(255/255f, 60/255f, 60/255f, 50/255f);
                 w.sr.setColor(w.tmpColor);
-                w.sr.rect(579, w.paddle2Y - 2, 16, p2H + 4);
-                // Core: opaque solid rect
+                w.sr.rect(564, w.paddle2Y - 2, 36, p2H + 4);
+                // Core
                 w.sr.setColor(CLR_LIGHT_RED);
-                w.sr.rect(580, w.paddle2Y, 10, p2H);
+                w.sr.rect(568, w.paddle2Y, 32, p2H);
                 // Ball-facing bright edge (left side, 2px)
                 w.tmpColor.set(255/255f, 170/255f, 170/255f, 1f);
                 w.sr.setColor(w.tmpColor);
-                w.sr.rect(578, w.paddle2Y, 2, p2H);
+                w.sr.rect(566, w.paddle2Y, 2, p2H);
             }
         }
     }
@@ -1019,23 +1165,22 @@ public class GameRenderer {
         int p1H = w.getPaddleHeight(1, w.shrinkPaddlesActive);
         int p2H = w.getPaddleHeight(2, w.shrinkPaddlesActive);
         if (w.texPaddle1 != null && !w.player1BankaiActive) {
-            w.batch.draw(w.texPaddle1, 8, w.paddle1Y, 14, p1H);
+            // Center the sprite on the left wall: half off-screen, half in-play
+            w.batch.draw(w.texPaddle1, -24, w.paddle1Y, 72, p1H);
         }
         if (w.texPaddle2 != null && !w.player2BankaiActive) {
-            w.batch.draw(w.texPaddle2, 578, w.paddle2Y, 14, p2H);
+            w.batch.draw(w.texPaddle2, 548, w.paddle2Y, 80, p2H);
         }
     }
 
     /** Draw ball sprite in batch pass (Phase 9). Called from within w.batch.begin()/end(). */
     void drawBallSprite() {
         boolean ghostActive = (w.player1GhostEffectTimer > 0 || w.player2GhostEffectTimer > 0);
-        // Ball drawn at (ballX, ballY) with 15x15 size (radius 7.5 matches shape)
-        if (ghostActive && w.texBallGhost != null) {
-            w.batch.draw(w.texBallGhost, w.ballX, w.ballY, 15, 15);
-        } else if (w.fireballActive && w.texBallFire != null) {
-            w.batch.draw(w.texBallFire, w.ballX, w.ballY, 15, 15);
+        if (ghostActive) return; // ball is invisible during ghost effect
+        if (w.fireballActive && w.texBallFire != null) {
+            w.batch.draw(w.texBallFire, w.ballX - 4, w.ballY - 4, 22, 22);
         } else if (w.texBall != null) {
-            w.batch.draw(w.texBall, w.ballX, w.ballY, 15, 15);
+            w.batch.draw(w.texBall, w.ballX - 4, w.ballY - 4, 22, 22);
         }
     }
 
@@ -1102,31 +1247,6 @@ public class GameRenderer {
                 prevX = nx; prevY = ny;
             }
         }
-        // Split ghost balls
-        if (w.splitActive) {
-            w.sr.setColor(CLR_WHITE_80);
-            for (int i = 0; i < 2; i++) {
-                int ox = (i == 0 ? -20 : 20);
-                int oy = (int)(Math.sin(w.elapsedTime * 10 + i * Math.PI) * 10);
-                w.sr.circle(w.ballX + ox + 7, w.ballY + oy + 7, 7.5f, 12);
-            }
-        }
-        // Ghost ball aura
-        boolean ghostActive = (w.player1GhostEffectTimer > 0 || w.player2GhostEffectTimer > 0);
-        if (ghostActive) {
-            for (int i = 0; i < 6; i++) {
-                double angle = w.elapsedTime * 6.67 + i * Math.PI / 3;
-                int dist = 15 + (int)(Math.sin(w.elapsedTime * 5) * 5);
-                int px = w.ballX + 7 + (int)(Math.cos(angle) * dist);
-                int py = w.ballY + 7 + (int)(Math.sin(angle) * dist);
-                w.tmpColor.set(200/255f, 200/255f, 1f, 80/255f);
-                w.sr.setColor(w.tmpColor);
-                w.sr.circle(px, py, 3, 6);
-            }
-            w.tmpColor.set(150/255f, 150/255f, 1f, 40/255f);
-            w.sr.setColor(w.tmpColor);
-            w.sr.circle(w.ballX + 7, w.ballY + 7, 15, 16);
-        }
         // Wraith balls
         if (w.wraithActive) {
             for (int wi = 0; wi < w.wraithBalls.size(); wi++) {
@@ -1164,6 +1284,8 @@ public class GameRenderer {
 
     void drawBall() {
         boolean ghostActive = (w.player1GhostEffectTimer > 0 || w.player2GhostEffectTimer > 0);
+        if (ghostActive) return; // ball is invisible during ghost effect
+
         float dangerRatio = w.dangerZoneTime / (float)w.maxDangerTime;
 
         // Check tunnel vision hiding
@@ -1175,18 +1297,17 @@ public class GameRenderer {
 
         // Ball color based on active effects
         Color ballCenter, ballOuter;
-        if (ghostActive) { ballCenter = c(200, 200, 255, 180); ballOuter = c(80, 80, 180, 80); }
-        else if (w.fireballActive) { ballCenter = c(255, 250, 200); ballOuter = c(255, 60, 0, 200); }
-else if (w.multiballActive) { ballCenter = c(255, 255, 100); ballOuter = CLR_YELLOW_DARK; }
+        if (w.fireballActive) { ballCenter = c(255, 250, 200); ballOuter = c(255, 60, 0, 200); }
         else if (dangerRatio > 0.5f) { ballCenter = c(255, 255, 200); ballOuter = c(200, 50, 0); }
         else { ballCenter = Color.WHITE; ballOuter = c(80, 100, 220, 180); }
 
-        // Single glow ring — raised alpha so it's actually visible
-        w.tmpColor.set(ballCenter.r, ballCenter.g, ballCenter.b, 50/255f);
-        w.sr.setColor(w.tmpColor);
-        w.sr.circle(w.ballX + 7, w.ballY + 7, 16, 16);
-
-        drawRadialGradient(w.ballX + 7, w.ballY + 7, 7.5f, ballCenter, ballOuter, 6);
+        if (w.texBall == null || w.fireballActive) {
+            // No custom texture — draw shape glow + solid ball
+            w.tmpColor.set(ballCenter.r, ballCenter.g, ballCenter.b, 50/255f);
+            w.sr.setColor(w.tmpColor);
+            w.sr.circle(w.ballX + 7, w.ballY + 7, 16, 16);
+            drawRadialGradient(w.ballX + 7, w.ballY + 7, 7.5f, ballCenter, ballOuter, 6);
+        }
 
         // Haki ball aura
         if (w.player1HakiPhaseActive || w.player2HakiPhaseActive) {
@@ -1348,14 +1469,10 @@ else if (w.multiballActive) { ballCenter = c(255, 255, 100); ballOuter = CLR_YEL
             else if ("giant".equals(pu.type)) { glow = CLR_GREEN_80; main = Color.GREEN; }
             else if ("shrink".equals(pu.type)) { glow = CLR_ORANGE_80; main = Color.ORANGE; }
             else if ("multiball".equals(pu.type)) { glow = CLR_HOT_PINK_80; main = CLR_HOT_PINK; }
-            else if ("jackpot".equals(pu.type)) { glow = CLR_GOLD_120; main = CLR_GOLD; }
-            else if ("jumpscare".equals(pu.type)) { glow = CLR_RED_80; main = CLR_RED; }
-else if ("dangerzone".equals(pu.type)) { glow = CLR_ORANGE_80; main = CLR_ORANGE_RED; }
+            else if ("dangerzone".equals(pu.type)) { glow = CLR_ORANGE_80; main = CLR_ORANGE_RED; }
             else if ("teleport".equals(pu.type)) { glow = CLR_PURPLE_80; main = CLR_BLUE_VIOLET; }
             else if ("fireball".equals(pu.type)) { glow = CLR_RED_80; main = CLR_ORANGE_RED2; }
             else if ("zigzag".equals(pu.type)) { glow = CLR_GREEN_80; main = CLR_LIME; }
-            else if ("split".equals(pu.type)) { glow = CLR_GOLD_120; main = CLR_GOLD; }
-            else if ("mirror".equals(pu.type)) { glow = CLR_CYAN_80; main = CLR_DEEP_SKY; }
             else if ("centerwall".equals(pu.type)) { glow = CLR_PURPLE_80; main = CLR_VIOLET; }
             else if ("invisiblewalls".equals(pu.type)) { glow = CLR_CYAN_80; main = CLR_LIGHT_BLUE; }
             else if ("shrinkpaddles".equals(pu.type)) { glow = CLR_CRIMSON_80; main = CLR_CRIMSON; }
@@ -1394,12 +1511,6 @@ else if ("dangerzone".equals(pu.type)) { glow = CLR_ORANGE_80; main = CLR_ORANGE
     }
 
     void drawScreenOverlays() {
-        // Mirror border
-        if (w.mirrorActive) {
-            w.sr.setColor(CLR_DEEP_SKY_100);
-            w.sr.rect(0, 0, 600, 5); w.sr.rect(0, 395, 600, 5);
-            w.sr.rect(0, 0, 5, 400); w.sr.rect(595, 0, 5, 400);
-        }
         // Time loop slow mo
         if (w.player1TimeLoopSlowMoTimer > 0 || w.player2TimeLoopSlowMoTimer > 0) {
             w.sr.setColor(CLR_LIGHT_BLUE_30);
@@ -1441,13 +1552,6 @@ else if ("dangerzone".equals(pu.type)) { glow = CLR_ORANGE_80; main = CLR_ORANGE
                 int offset = (int)(10 * Math.sin(w.elapsedTime * 10 + i));
                 w.sr.rect(300, i * 40 + offset, 300, 20);
             }
-        }
-        // Jumpscare
-        if (w.jumpscareActive) {
-            int flash = (int)(Math.sin(w.jumpscareDuration * 0.5) * 100 + 155);
-            w.tmpColor.set(flash / 255f, 0f, 0f, 200/255f);
-            w.sr.setColor(w.tmpColor);
-            w.sr.rect(0, 0, 600, 400);
         }
     }
 
@@ -1605,13 +1709,6 @@ else if ("dangerzone".equals(pu.type)) { glow = CLR_ORANGE_80; main = CLR_ORANGE
         if (w.player2DashActive > 0) { w.font.setColor(CLR_LIGHT_RED); w.font.draw(w.batch, "DASH!", 530, w.paddle2Y - 10); }
         if (w.player2SwordSwingTimer > 0) { w.font.setColor(CLR_DARK_RED); w.font.draw(w.batch, "ZANGETSU!", 480, w.paddle2Y - 20); }
         if (w.player2HammerActive && w.player2HammerDuration > 0) { w.font.setColor(Color.ORANGE); w.font.draw(w.batch, "HAMMER!", 380, 200); }
-        // Mirror
-        if (w.mirrorActive) {
-            w.font.setColor(CLR_DEEP_SKY_150);
-            String mt = "MIRRORED";
-            w.glyphLayout.setText(w.font, mt);
-            w.font.draw(w.batch, mt, 300 - w.glyphLayout.width / 2, 200);
-        }
         // Tunnel vision
         if (w.player1TunnelTimer > 0) { w.font.setColor(CLR_YELLOW); w.font.draw(w.batch, "TUNNEL VISION!", 100, 200); }
         if (w.player2TunnelTimer > 0) { w.font.setColor(CLR_YELLOW); w.font.draw(w.batch, "TUNNEL VISION!", 400, 200); }
@@ -1640,6 +1737,7 @@ else if ("dangerzone".equals(pu.type)) { glow = CLR_ORANGE_80; main = CLR_ORANGE
         int shrinkLv2 = w.getEffectiveAbilityLevel(2, "shrink_opponent");
         int shrinkCD2 = Math.max(400, 900 - (Math.max(1, shrinkLv2) - 1) * 80);
         y1 = drawOneCooldownBar(1, "reverse_controls", w.player1ReverseTimer, 2000,      10, y1);
+        y1 = drawOneCooldownBar(1, "ghost_ball",       w.player1GhostTimer,   w.ghostCooldown, 10, y1);
         y1 = drawOneCooldownBar(1, "blind",            w.player1BlindTimer,   2000,      10, y1);
         y1 = drawOneCooldownBar(1, "shrink_opponent",  w.player1ShrinkTimer,  shrinkCD1, 10, y1);
         y1 = drawOneCooldownBar(1, "gravity_hammer", w.player1HammerTimer,    w.hammerCooldown,    10, y1);
@@ -1650,6 +1748,7 @@ else if ("dangerzone".equals(pu.type)) { glow = CLR_ORANGE_80; main = CLR_ORANGE
         y1 = drawOneCooldownBar(1, "screen_warp",    w.player1WarpTimer,      w.warpCooldown,      10, y1);
         // Player 2 bars (top-right, x=540, width=50)
         y2 = drawOneCooldownBar(2, "reverse_controls", w.player2ReverseTimer, 2000,      540, y2);
+        y2 = drawOneCooldownBar(2, "ghost_ball",       w.player2GhostTimer,   w.ghostCooldown, 540, y2);
         y2 = drawOneCooldownBar(2, "blind",            w.player2BlindTimer,   2000,      540, y2);
         y2 = drawOneCooldownBar(2, "shrink_opponent",  w.player2ShrinkTimer,  shrinkCD2, 540, y2);
         y2 = drawOneCooldownBar(2, "gravity_hammer", w.player2HammerTimer,    w.hammerCooldown,    540, y2);
@@ -1858,15 +1957,15 @@ else if ("dangerzone".equals(pu.type)) { glow = CLR_ORANGE_80; main = CLR_ORANGE
         w.sr.setColor(w.tmpColor);
         w.sr.rect(160, 200, 280, 30);
 
-        // Chest preview (phase 2)
+        // Chest preview background glow (phase 2) — sprite drawn in batch pass
         if (w.matchResultPhase == 2 && !w.matchResultChestType.isEmpty()) {
             String ct = w.matchResultChestType;
-            if ("gold".equals(ct)) { w.tmpColor.set(1f, 0.8f, 0f, 1f); }
-            else if ("magical".equals(ct)) { w.tmpColor.set(0.7f, 0f, 1f, 1f); }
-            else if ("arena".equals(ct)) { w.tmpColor.set(0f, 0.6f, 1f, 1f); }
-            else { w.tmpColor.set(0.6f, 0.6f, 0.6f, 1f); }
+            if ("gold".equals(ct)) { w.tmpColor.set(1f, 0.8f, 0f, 0.25f); }
+            else if ("magical".equals(ct)) { w.tmpColor.set(0.7f, 0f, 1f, 0.25f); }
+            else if ("arena".equals(ct)) { w.tmpColor.set(0f, 0.6f, 1f, 0.25f); }
+            else { w.tmpColor.set(0.6f, 0.6f, 0.6f, 0.25f); }
             w.sr.setColor(w.tmpColor);
-            w.sr.rect(240, 160, 120, 80);
+            w.sr.rect(220, 155, 160, 100);
         }
 
         // Arena unlock glow (phase 3)
@@ -1906,13 +2005,22 @@ else if ("dangerzone".equals(pu.type)) { glow = CLR_ORANGE_80; main = CLR_ORANGE
         w.glyphLayout.setText(w.font, deltaStr);
         w.font.draw(w.batch, deltaStr, 300 - w.glyphLayout.width / 2, 240);
 
-        // Phase 2: chest earned
+        // Phase 2: chest earned — sprite + label
         if (w.matchResultPhase == 2 && !w.matchResultChestType.isEmpty()) {
-            String chestName = ChestSystem.getChestDisplayName(w.matchResultChestType);
+            String ct = w.matchResultChestType;
+            int chestIdx = -1;
+            String[] cto = {"silver", "gold", "magical", "arena"};
+            for (int ci = 0; ci < cto.length; ci++) { if (cto[ci].equals(ct)) { chestIdx = ci; break; } }
+            if (chestIdx >= 0 && chestIdx < w.texChests.length && w.texChests[chestIdx] != null) {
+                int sz = 80;
+                // Flip vertically same as menu chest
+                w.batch.draw(w.texChests[chestIdx], 300 - sz / 2, 165 + sz, sz, -sz);
+            }
+            String chestName = ChestSystem.getChestDisplayName(ct);
             w.tmpColor.set(1f, 1f, 1f, 1f);
             w.font.setColor(w.tmpColor);
-            w.glyphLayout.setText(w.font, chestName + " Earned!");
-            w.font.draw(w.batch, chestName + " Earned!", 300 - w.glyphLayout.width / 2, 160);
+            w.glyphLayout.setText(w.font, chestName + " Chest Earned!");
+            w.font.draw(w.batch, chestName + " Chest Earned!", 300 - w.glyphLayout.width / 2, 160);
         }
 
         // Phase 3: new arena

@@ -38,6 +38,20 @@ public class PongusGame extends ApplicationAdapter {
     // All game state lives in GameWorld
     GameWorld w;
 
+    // Network adapter injected by launcher (StubNetworkAdapter on desktop, GwtNetworkAdapter on HTML)
+    private final com.pongus.game.network.NetworkAdapter pendingNetwork;
+
+    public PongusGame() {
+        this.pendingNetwork = new com.pongus.game.network.StubNetworkAdapter();
+    }
+
+    public PongusGame(com.pongus.game.network.NetworkAdapter network) {
+        this.pendingNetwork = network;
+    }
+
+    // Timeout before falling back to AI (seconds)
+    private static final float MATCHMAKING_TIMEOUT = 8f;
+
     // Ability system
     com.pongus.game.ability.AbilityManager abilityManager;
 
@@ -58,6 +72,10 @@ public class PongusGame extends ApplicationAdapter {
         "NightHawkX", "ThunderClap99", "alex_plays", "PhantomHit", "ArcadeGhost"
     };
 
+    // Ability button layout constants (match GameRenderer button layout)
+    private static final int ABIL_BTN_W = 80, ABIL_BTN_H = 24, ABIL_BTN_GAP = 3, ABIL_BOTTOM_Y = 394;
+    private static final int P1_ABIL_X = 5, P2_ABIL_X = 515;
+
     @Override
     public void create() {
         Gdx.app.log("Pongus", "Game created");
@@ -66,6 +84,39 @@ public class PongusGame extends ApplicationAdapter {
         w = new GameWorld();
         abilityManager = new com.pongus.game.ability.AbilityManager();
         renderer = new GameRenderer(w, abilityManager);
+
+        // Wire up network adapter
+        w.network = pendingNetwork;
+        w.network.init("pongus", new com.pongus.game.network.NetworkCallbacks() {
+            public void onReady() {
+                Gdx.app.log("Pongus", "Netlib ready");
+            }
+            public void onPeerConnected(String peerId) {
+                Gdx.app.log("Pongus", "Peer connected: " + peerId);
+                // Determine host vs guest: whoever created the lobby is the host
+                // The host is whoever called findMatch first (created a lobby).
+                // We detect this by whether we already had a lobby created (isHost set in findMatch flow).
+                Gdx.app.postRunnable(new Runnable() {
+                    public void run() {
+                        if (w.showingMatchmaking) {
+                            startOnlineMatch();
+                        }
+                    }
+                });
+            }
+            public void onMessage(String msg) {
+                handleNetworkMessage(msg);
+            }
+            public void onDisconnected(String peerId) {
+                Gdx.app.log("Pongus", "Peer disconnected");
+                if (!w.showingMainMenu && w.isOnlineMatch && !w.isPaused) {
+                    // Opponent quit mid-match — local player wins and gets full trophy reward
+                    w.isOnlineMatch = false;
+                    boolean localIsP1 = w.isHost;
+                    handleMatchEnd(localIsP1);
+                }
+            }
+        });
 
         // Camera: Y-down to match Swing coordinate system
         w.camera = new OrthographicCamera();
@@ -226,6 +277,13 @@ public class PongusGame extends ApplicationAdapter {
                     dismissMatchResult();
                     return true;
                 }
+                // Matchmaking cancel — any tap cancels and returns to menu
+                if (w.showingMatchmaking) {
+                    w.showingMatchmaking = false;
+                    w.network.cancelSearch();
+                    w.showingMainMenu = true;
+                    return true;
+                }
                 // Arena road touch
                 if (w.showingArenaRoad) {
                     w.tmpVec3.set(screenX, screenY, 0);
@@ -371,19 +429,52 @@ public class PongusGame extends ApplicationAdapter {
                     return true; // consume all touches on collection screen
                 }
 
-                // Touch controls: set paddle target during gameplay (Phase 11)
-                if (!w.showingMainMenu && !w.showingCollection && !w.showingArenaRoad && !w.showingPractice && w.matchTimerActive) {
+                // Gameplay touch — relative drag + ability buttons
+                boolean inGameplay = !w.showingMainMenu && !w.showingCollection
+                    && !w.showingArenaRoad && !w.showingPractice && !w.showingCountdown;
+                if (inGameplay) {
                     w.tmpVec3.set(screenX, screenY, 0);
                     w.camera.unproject(w.tmpVec3, w.viewport.getScreenX(), w.viewport.getScreenY(),
                         w.viewport.getScreenWidth(), w.viewport.getScreenHeight());
                     float vx = w.tmpVec3.x;
                     float vy = w.tmpVec3.y;
-                    if (vx < 300) {
-                        w.touchTargetY1 = vy;
-                    } else {
-                        w.touchTargetY2 = vy;
+                    // Ability buttons — only on touchscreen, only for key-press abilities.
+                    // Buttons are stacked from ABIL_BOTTOM_Y upward, skipping passive abilities.
+                    if (vx >= P1_ABIL_X && vx <= P1_ABIL_X + ABIL_BTN_W) {
+                        int slot = 0;
+                        for (int bi = 0; bi < w.player1DrawnCards.size() && slot < 4; bi++) {
+                            if (!renderer.abilityManager.needsKeyPress(w.player1DrawnCards.get(bi))) continue;
+                            int bY = ABIL_BOTTOM_Y - (slot + 1) * ABIL_BTN_H - slot * ABIL_BTN_GAP;
+                            if (vy >= bY && vy <= bY + ABIL_BTN_H) {
+                                handleAbilityKeyPress(w.player1AbilityKey);
+                                return true;
+                            }
+                            slot++;
+                        }
                     }
-                    // Don't return here — let existing touch handling continue for ability activation etc.
+                    if (!w.singlePlayer && vx >= P2_ABIL_X && vx <= P2_ABIL_X + ABIL_BTN_W) {
+                        int slot = 0;
+                        for (int bi = 0; bi < w.player2DrawnCards.size() && slot < 4; bi++) {
+                            if (!renderer.abilityManager.needsKeyPress(w.player2DrawnCards.get(bi))) continue;
+                            int bY = ABIL_BOTTOM_Y - (slot + 1) * ABIL_BTN_H - slot * ABIL_BTN_GAP;
+                            if (vy >= bY && vy <= bY + ABIL_BTN_H) {
+                                handleAbilityKeyPress(w.player2AbilityKey);
+                                return true;
+                            }
+                            slot++;
+                        }
+                    }
+                    // Register drag pointer per side (left = P1, right = P2)
+                    if (vx < 300 && w.p1DragPointer == -1) {
+                        w.p1DragPointer = pointer;
+                        w.p1LastDragY   = vy;
+                        return true;
+                    }
+                    if (vx >= 300 && w.p2DragPointer == -1) {
+                        w.p2DragPointer = pointer;
+                        w.p2LastDragY   = vy;
+                        return true;
+                    }
                 }
 
                 if (!w.showingMainMenu || w.dialog.isActive()) return false;
@@ -405,29 +496,37 @@ public class PongusGame extends ApplicationAdapter {
 
             @Override
             public boolean touchDragged(int screenX, int screenY, int pointer) {
-                // Update touch paddle targets while finger is dragging (Phase 11)
-                if (!w.showingMainMenu && !w.showingCollection && !w.showingArenaRoad && !w.showingPractice && w.matchTimerActive) {
-                    w.tmpVec3.set(screenX, screenY, 0);
-                    w.camera.unproject(w.tmpVec3, w.viewport.getScreenX(), w.viewport.getScreenY(),
-                        w.viewport.getScreenWidth(), w.viewport.getScreenHeight());
-                    float vx = w.tmpVec3.x;
-                    float vy = w.tmpVec3.y;
-                    if (vx < 300) {
-                        w.touchTargetY1 = vy;
-                    } else {
-                        w.touchTargetY2 = vy;
-                    }
+                // Relative drag: apply delta to paddle position directly
+                if (pointer != w.p1DragPointer && pointer != w.p2DragPointer) return false;
+                w.tmpVec3.set(screenX, screenY, 0);
+                w.camera.unproject(w.tmpVec3, w.viewport.getScreenX(), w.viewport.getScreenY(),
+                    w.viewport.getScreenWidth(), w.viewport.getScreenHeight());
+                float vy = w.tmpVec3.y;
+                if (pointer == w.p1DragPointer && w.player1StunTimer <= 0) {
+                    float delta = vy - w.p1LastDragY;
+                    // Clamp delta to prevent first-frame coordinate mismatch from teleporting paddle
+                    delta = Math.max(-80f, Math.min(80f, delta));
+                    int p1H = w.getPaddleHeight(1, w.shrinkPaddlesActive);
+                    w.paddle1Y = Math.max(15, Math.min(400 - p1H - 15, (int)(w.paddle1Y + delta)));
+                    w.p1LastDragY = vy;
+                    return true;
+                }
+                if (pointer == w.p2DragPointer && !w.singlePlayer && w.player2StunTimer <= 0) {
+                    float delta = vy - w.p2LastDragY;
+                    delta = Math.max(-80f, Math.min(80f, delta));
+                    int p2H = w.getPaddleHeight(2, w.shrinkPaddlesActive);
+                    w.paddle2Y = Math.max(15, Math.min(400 - p2H - 15, (int)(w.paddle2Y + delta)));
+                    w.p2LastDragY = vy;
+                    return true;
                 }
                 return false;
             }
 
             @Override
             public boolean touchUp(int screenX, int screenY, int pointer, int button) {
-                // Clear touch targets on finger lift (Phase 11)
-                if (pointer == 0) {
-                    w.touchTargetY1 = -1f;
-                    w.touchTargetY2 = -1f;
-                }
+                // Release drag pointer — paddle stays where it stopped
+                if (pointer == w.p1DragPointer) w.p1DragPointer = -1;
+                if (pointer == w.p2DragPointer) w.p2DragPointer = -1;
                 return false;
             }
         });
@@ -461,7 +560,6 @@ public class PongusGame extends ApplicationAdapter {
         // Ball sprites
         try { w.texBall      = new com.badlogic.gdx.graphics.Texture(Gdx.files.internal("sprites/ball.png")); } catch (Exception e) {}
         try { w.texBallFire  = new com.badlogic.gdx.graphics.Texture(Gdx.files.internal("sprites/ball_fire.png")); } catch (Exception e) {}
-        try { w.texBallGhost = new com.badlogic.gdx.graphics.Texture(Gdx.files.internal("sprites/ball_ghost.png")); } catch (Exception e) {}
         // Chest sprites
         String[] chestTypes = {"silver", "gold", "magical", "arena"};
         for (int i = 0; i < chestTypes.length; i++) {
@@ -509,6 +607,14 @@ public class PongusGame extends ApplicationAdapter {
     public void render() {
         float delta = Gdx.graphics.getDeltaTime();
         w.elapsedTime += delta;
+
+        // Matchmaking timeout — tick while searching; fall back to AI if nobody found
+        if (w.showingMatchmaking) {
+            w.matchmakingTimer += delta;
+            if (w.matchmakingTimer >= MATCHMAKING_TIMEOUT) {
+                startAIFallback();
+            }
+        }
 
         // Toast timer countdown (always ticks so toasts fade out even when paused)
         if (w.toastP1Timer > 0) w.toastP1Timer -= Gdx.graphics.getDeltaTime();
@@ -576,7 +682,9 @@ public class PongusGame extends ApplicationAdapter {
         Gdx.gl.glEnable(GL20.GL_BLEND);
         Gdx.gl.glBlendFunc(GL20.GL_SRC_ALPHA, GL20.GL_ONE_MINUS_SRC_ALPHA);
 
-        if (w.showingArenaRoad) {
+        if (w.showingMatchmaking) {
+            renderer.renderMatchmaking();
+        } else if (w.showingArenaRoad) {
             renderer.renderArenaRoad();
         } else if (w.showingPractice) {
             renderer.renderPractice();
@@ -603,7 +711,7 @@ public class PongusGame extends ApplicationAdapter {
 
     private void handleMenuButtonClick(int buttonIndex) {
         switch (buttonIndex) {
-            case 0: startSinglePlayerFromMenu(); break;  // BATTLE button
+            case 0: startBattleFromMenu(); break;  // BATTLE button
             case 1: // Collection button
                 w.showingMainMenu = false;
                 w.showingCollection = true;
@@ -681,9 +789,9 @@ public class PongusGame extends ApplicationAdapter {
     private void startSinglePlayerFromMenu() {
         // Scale difficulty by trophies so the opponent feels like real matchmaking
         int trophies = (w.profile != null) ? w.profile.trophies : 0;
-        if (trophies < 300) { w.aiDifficulty = 1; w.aiSpeedMultiplier = 0.45; }
-        else if (trophies < 800) { w.aiDifficulty = 2; w.aiSpeedMultiplier = 0.62; }
-        else { w.aiDifficulty = 3; w.aiSpeedMultiplier = 0.78; }
+        if (trophies < 300) { w.aiDifficulty = 1; w.aiSpeedMultiplier = 0.60; }
+        else if (trophies < 800) { w.aiDifficulty = 2; w.aiSpeedMultiplier = 1.0; }
+        else { w.aiDifficulty = 3; w.aiSpeedMultiplier = 1.0; }
         w.singlePlayer = true;
         w.storyModeActive = false;
         w.learningAIEnabled = false;
@@ -696,6 +804,82 @@ public class PongusGame extends ApplicationAdapter {
         w.showingCountdown = true;
         w.countdownTimer = 3.0f;
         spawnMapPowerUp();
+    }
+
+    /** BATTLE button handler — tries online first, falls back to AI after timeout. */
+    private void startBattleFromMenu() {
+        if (w.network.isAvailable()) {
+            // Show searching screen and let matchmaking timer run
+            w.showingMatchmaking = true;
+            w.matchmakingTimer = 0f;
+            w.isHost = false; // bridge sends H:1 or H:0 before onPeerConnected to set this
+            int arenaIndex = (w.profile != null) ? ArenaConfig.getArenaIndex(w.profile.trophies) : 0;
+            w.network.findMatch(arenaIndex);
+        } else {
+            startSinglePlayerFromMenu();
+        }
+    }
+
+    /** Called from onPeerConnected — a real opponent was found. */
+    private void startOnlineMatch() {
+        w.showingMatchmaking = false;
+        w.isOnlineMatch = true;
+        w.singlePlayer = false;
+        w.storyModeActive = false;
+        w.learningAIEnabled = false;
+        resetGameState();
+        // Assign opponent a random realistic name so the match feels real
+        w.player2Name = w.player2DisplayName;
+        applyDeckAndSynergy();
+        w.showingMainMenu = false;
+        w.isPaused = true;
+        w.showingCountdown = true;
+        w.countdownTimer = 3.0f;
+        spawnMapPowerUp();
+    }
+
+    /** Called by matchmaking timer when no opponent found — silently start AI. */
+    private void startAIFallback() {
+        w.showingMatchmaking = false;
+        w.network.cancelSearch();
+        w.isOnlineMatch = false;
+        startSinglePlayerFromMenu();
+    }
+
+    /** Parse and apply a network message from the peer. */
+    private void handleNetworkMessage(String msg) {
+        if (msg == null || msg.length() < 2) return;
+        char type = msg.charAt(0);
+        if (type == 'P') {
+            // Paddle position: "P:<y>"
+            try {
+                w.networkOpponentPaddleY = Float.parseFloat(msg.substring(2));
+            } catch (NumberFormatException e) { /* ignore malformed */ }
+        } else if (type == 'E') {
+            // Match end signal from peer — end locally too if not already ended
+            if (!w.showingMainMenu && w.isOnlineMatch && msg.length() >= 3) {
+                boolean p1Won = msg.charAt(2) == '1';
+                handleMatchEnd(p1Won);
+            }
+        } else if (type == 'A') {
+            // Ability used: "A:1" or "A:2"
+            if (msg.length() >= 3) {
+                int playerN = msg.charAt(2) - '0';
+                if (playerN == 1) triggerAbilityForPlayer(1);
+                else              triggerAbilityForPlayer(2);
+            }
+        } else if (type == 'H') {
+            // Host assignment: "H:0" = you are guest (P2), "H:1" = you are host (P1)
+            if (msg.length() >= 3) {
+                w.isHost = msg.charAt(2) == '1';
+            }
+        }
+    }
+
+    /** Directly trigger an ability activation for the given player (used for network sync). */
+    private void triggerAbilityForPlayer(int player) {
+        int key = (player == 1) ? w.player1AbilityKey : w.player2AbilityKey;
+        handleAbilityKeyPress(key);
     }
 
     private void startPracticeMatch() {
@@ -772,9 +956,10 @@ public class PongusGame extends ApplicationAdapter {
             return;
         }
         if (!ChestSystem.isChestReady(slot)) {
-            w.dialog.showMessage("Not Ready",
-                "Chest unlocks in " + ChestSystem.getChestTimeRemaining(slot),
-                new DialogSystem.MessageCallback() { public void onClose() {} });
+            // Each tap shaves 1 second off the unlock timer
+            slot.unlockTimeMs -= 1000;
+            w.profile.save(Gdx.app.getPreferences(PROFILE_PREF));
+            renderer.invalidateActivityCache();
             return;
         }
         int arenaIdx = ArenaConfig.getArenaIndex(w.profile.trophies);
@@ -793,11 +978,27 @@ public class PongusGame extends ApplicationAdapter {
     }
 
     void returnToMainMenu() {
+        // If quitting an active online match intentionally, count it as a loss
+        if (w.isOnlineMatch && !w.showingMainMenu && w.matchResultPhase == 0 && w.profile != null) {
+            w.profile.trophies = TrophySystem.calculateTrophiesAfterLoss(w.profile.trophies);
+            w.profile.arenaIndex = TrophySystem.getArenaIndex(w.profile.trophies);
+            w.profile.totalMatches++;
+            String histEntry = "L|" + w.player2Name + "|" + TrophySystem.TROPHIES_PER_LOSS;
+            w.profile.matchHistory.add(0, histEntry);
+            if (w.profile.matchHistory.size() > 5) w.profile.matchHistory.remove(5);
+            w.profile.save(Gdx.app.getPreferences(PROFILE_PREF));
+        }
         w.showingMainMenu = true;
         w.showingCollection = false;
         w.showingArenaRoad = false;
         w.showingPractice = false;
         w.showingCountdown = false;
+        w.showingMatchmaking = false;
+        w.isOnlineMatch = false;
+        w.isHost = false;
+        w.networkOpponentPaddleY = 200f;
+        w.p1DragPointer = -1;
+        w.p2DragPointer = -1;
         w.isPaused = true;
         w.storyModeActive = false;
         w.menuSelectedLevel = w.storyModeLevel - 1;
@@ -971,6 +1172,10 @@ public class PongusGame extends ApplicationAdapter {
     private void handleMatchEnd(boolean player1Won) {
         w.isPaused = true;
         w.matchTimerActive = false;
+        // Both players notify each other of match result
+        if (w.isOnlineMatch) {
+            w.network.send("E:" + (player1Won ? "1" : "2"));
+        }
         if (w.practiceMode) {
             // Practice: no trophies, no chest, no history
             w.practiceMode = false;
@@ -1151,8 +1356,16 @@ public class PongusGame extends ApplicationAdapter {
         int paddleMaxY2 = GameWorld.VIRTUAL_HEIGHT - paddleHeight2;
         updatePaddleMovement(paddleMaxY1, paddleMaxY2, paddleHeight1, paddleHeight2);
 
-        // === AI / PLAYER 2 MOVEMENT ===
-        if (w.singlePlayer) {
+        // === AI / PLAYER 2 / NETWORK OPPONENT MOVEMENT ===
+        if (w.isOnlineMatch) {
+            // Drive the opponent's paddle from the last received network position
+            int clamped = (int) Math.max(15, Math.min(paddleMaxY2 - 15, w.networkOpponentPaddleY));
+            if (w.isHost) w.paddle2Y = clamped;
+            else          w.paddle1Y = clamped;
+            // Send our own paddle position to the peer
+            float myY = w.isHost ? w.paddle1Y : w.paddle2Y;
+            w.network.send("P:" + myY);
+        } else if (w.singlePlayer) {
             updateAI(paddleMaxY2);
         } else {
             updatePlayer2Movement(paddleMaxY2);
@@ -1202,22 +1415,6 @@ public class PongusGame extends ApplicationAdapter {
     // ==================== UPDATE SUB-METHODS ====================
 
     private void updateTimers() {
-        // Jumpscare timer
-        if (w.jumpscareActive) {
-            w.jumpscareDuration += w.dti;
-            if (w.jumpscareDuration >= w.maxJumpscareDuration) {
-                w.jumpscareActive = false;
-                w.jumpscareDuration = 0;
-            }
-        }
-        // Multiball timer
-        if (w.multiballActive) {
-            w.multiballDuration += w.dti;
-            if (w.multiballDuration >= w.maxMultiballDuration) {
-                w.multiballActive = false;
-                w.multiballDuration = 0;
-            }
-        }
         // Stun timers
         if (w.player1StunTimer > 0) w.player1StunTimer = Math.max(0, w.player1StunTimer - w.dti);
         if (w.player2StunTimer > 0) w.player2StunTimer = Math.max(0, w.player2StunTimer - w.dti);
@@ -1419,20 +1616,6 @@ public class PongusGame extends ApplicationAdapter {
         // Player 1 movement (with debuff checks)
         if (w.player1StunTimer > 0) return; // Stunned - no movement handled here
 
-        // Touch control for P1 (Phase 11)
-        if (w.touchTargetY1 >= 0 && w.player1StunTimer <= 0) {
-            int paddleH1 = w.getPaddleHeight(1, w.shrinkPaddlesActive);
-            float targetCenter = w.touchTargetY1 - paddleH1 / 2f;
-            float diff = targetCenter - w.paddle1Y;
-            float step = Math.min(Math.abs(diff), w.getPlayerSpeed(1));
-            if (Math.abs(diff) > 2) {
-                w.paddle1Y += (diff > 0) ? step : -step;
-            }
-            int maxY1 = 400 - paddleH1 - 15;
-            if (w.paddle1Y < 15) w.paddle1Y = 15;
-            if (w.paddle1Y > maxY1) w.paddle1Y = maxY1;
-        }
-
         int moveSpeed1 = w.getPlayerSpeed(1);
         // slow_opponent: player2's slow_opponent level reduces player1's speed by 15% per level, cap 50%
         int slowOppLevel1 = w.getEffectiveAbilityLevel(2, "slow_opponent");
@@ -1464,20 +1647,6 @@ public class PongusGame extends ApplicationAdapter {
 
     private void updatePlayer2Movement(int paddleMaxY2) {
         if (w.player2StunTimer > 0) return;
-
-        // Touch control for P2 (2P local only — not when AI controls P2) (Phase 11)
-        if (w.touchTargetY2 >= 0 && !w.singlePlayer && w.player2StunTimer <= 0) {
-            int paddleH2 = w.getPaddleHeight(2, w.shrinkPaddlesActive);
-            float targetCenter = w.touchTargetY2 - paddleH2 / 2f;
-            float diff = targetCenter - w.paddle2Y;
-            float step = Math.min(Math.abs(diff), w.getPlayerSpeed(2));
-            if (Math.abs(diff) > 2) {
-                w.paddle2Y += (diff > 0) ? step : -step;
-            }
-            int maxY2 = 400 - paddleH2 - 15;
-            if (w.paddle2Y < 15) w.paddle2Y = 15;
-            if (w.paddle2Y > maxY2) w.paddle2Y = maxY2;
-        }
 
         int moveSpeed2 = w.getPlayerSpeed(2);
         // slow_opponent: player1's slow_opponent level reduces player2's speed by 15% per level, cap 50%
@@ -1635,20 +1804,18 @@ public class PongusGame extends ApplicationAdapter {
             w.ballXR = moveX - (int) moveX;
             w.ballYR = moveY - (int) moveY;
 
-            // Gravity hammer passive: always-on downward gravity when drawn.
-            // Each level adds 0.04 gravity per tick, capped at 0.20 (level 5).
+            // Gravity hammer passive: applies only on the opponent's side of the court.
+            // P1's hammer pulls ball down on the right half; P2's on the left half.
             int gravHammerLv1 = w.getEffectiveAbilityLevel(1, "gravity_hammer");
             int gravHammerLv2 = w.getEffectiveAbilityLevel(2, "gravity_hammer");
-            int maxGravLevel = Math.max(gravHammerLv1, gravHammerLv2);
-            if (maxGravLevel > 0) {
-                int cappedGravLevel = Math.min(maxGravLevel, 5);
-                double gravAccel = cappedGravLevel * 0.04;
-                // Accumulate gravity in ballYR (sub-pixel remainder used for smooth movement)
+            int activeGravLevel = (w.ballX >= 300) ? gravHammerLv1 : gravHammerLv2;
+            if (activeGravLevel > 0) {
+                int cappedGravLevel = Math.min(activeGravLevel, 5);
+                double gravAccel = cappedGravLevel * 0.25;
                 w.ballYR += gravAccel * w.dt;
-                if (w.ballYR >= 1.0) {
-                    int gravPixels = (int)w.ballYR;
-                    w.ballY += gravPixels;
-                    w.ballYR -= gravPixels;
+                while (w.ballYR >= 1.0) {
+                    w.ballY += 1;
+                    w.ballYR -= 1.0;
                 }
             }
         }
@@ -1664,13 +1831,13 @@ public class PongusGame extends ApplicationAdapter {
             if (w.ball2Y > 390) { w.ball2Y = 390; w.ball2VelY = -Math.abs(w.ball2VelY); }
             // Paddle 1 hit
             int p1H = w.getPaddleHeight(1, w.shrinkPaddlesActive);
-            if (w.ball2X < 22 && w.ball2X > 8 && w.ball2Y + 14 > w.paddle1Y && w.ball2Y < w.paddle1Y + p1H) {
+            if (w.ball2X < 32 && w.ball2X > 0 && w.ball2Y + 14 > w.paddle1Y && w.ball2Y < w.paddle1Y + p1H) {
                 w.ball2VelX = Math.abs(w.ball2VelX);
                 w.ball2Speed = Math.min(w.ball2Speed + 0.3, 4.0);
             }
             // Paddle 2 hit
             int p2H = w.getPaddleHeight(2, w.shrinkPaddlesActive);
-            if (w.ball2X + 14 > 578 && w.ball2X < 592 && w.ball2Y + 14 > w.paddle2Y && w.ball2Y < w.paddle2Y + p2H) {
+            if (w.ball2X + 14 > 568 && w.ball2X < 600 && w.ball2Y + 14 > w.paddle2Y && w.ball2Y < w.paddle2Y + p2H) {
                 w.ball2VelX = -Math.abs(w.ball2VelX);
                 w.ball2Speed = Math.min(w.ball2Speed + 0.3, 4.0);
             }
@@ -1708,10 +1875,6 @@ public class PongusGame extends ApplicationAdapter {
             if (w.zigzagDuration >= w.maxZigzagDuration) { w.zigzagActive = false; w.zigzagDuration = 0; w.zigzagTimer = 0; }
             if (w.zigzagTimer >= w.zigzagInterval) { w.ballVelY = (Math.random() < 0.5 ? -1 : 1) * (2 + (int)(Math.random() * 4)); w.zigzagTimer = 0; }
         }
-        // Split timer
-        if (w.splitActive) { w.splitDuration += w.dti; if (w.splitDuration >= w.maxSplitDuration) { w.splitActive = false; w.splitDuration = 0; } }
-        // Mirror timer
-        if (w.mirrorActive) { w.mirrorDuration += w.dti; if (w.mirrorDuration >= w.maxMirrorDuration) { w.mirrorActive = false; w.mirrorDuration = 0; } }
         // Invisible walls
         if (w.invisibleWallsActive) {
             w.invisibleWallsDuration += w.dti;
@@ -1844,8 +2007,11 @@ public class PongusGame extends ApplicationAdapter {
 
     private void updatePaddleCollisions(int paddleHeight1, int paddleHeight2) {
         w.tmpBallRect.set(w.ballX, w.ballY, 15, 15);
-        w.tmpPaddle1Rect.set(10, w.paddle1Y, 10, paddleHeight1);
-        w.tmpPaddle2Rect.set(580, w.paddle2Y, 10, paddleHeight2);
+        // Hitbox matches the shape core (32px wide), which the sprite body is aligned to.
+        int p1W = 24;
+        int p2X = 576;
+        w.tmpPaddle1Rect.set(0,   w.paddle1Y, p1W,       paddleHeight1);
+        w.tmpPaddle2Rect.set(p2X, w.paddle2Y, 600 - p2X, paddleHeight2);
 
         // Barrier collision (permanent passive — stays active, does not deactivate on hit)
         if (w.player1BarrierActive) {
@@ -1857,26 +2023,22 @@ public class PongusGame extends ApplicationAdapter {
             if (w.tmpBallRect.overlaps(br)) { w.ballVelX = -w.ballVelX; }
         }
 
-        // Trap collision
+        // Trap collision — stuns the opponent paddle, ball passes through unchanged
         if (w.player1TrapActive && !w.ballFrozenByTrap) {
             Rectangle tr = new Rectangle(w.player1TrapX - w.trapSize/2, w.player1TrapY - w.trapSize/2, w.trapSize, w.trapSize);
             if (w.tmpBallRect.overlaps(tr)) {
-                if (w.player2StunImmunityTimer == 0) w.player2StunTimer = 120;
-                int speed = Math.max(5, (int)Math.sqrt(w.ballVelX*w.ballVelX + w.ballVelY*w.ballVelY));
-                w.ballVelX = Math.abs(speed);
-                w.ballVelY = (int)((Math.random() - 0.5) * speed);
-                if (w.ballVelY == 0) w.ballVelY = (Math.random() > 0.5) ? 2 : -2;
+                int lv = w.getEffectiveAbilityLevel(1, "trap");
+                int stunDur = 20 + (lv - 1) * 7; // lv1=20, lv2=27, lv3=34, lv4=41, lv5=48 (all <50 = 0.5s)
+                if (w.player2StunImmunityTimer == 0) w.player2StunTimer = stunDur;
                 w.player1TrapActive = false;
             }
         }
         if (w.player2TrapActive && !w.ballFrozenByTrap) {
             Rectangle tr = new Rectangle(w.player2TrapX - w.trapSize/2, w.player2TrapY - w.trapSize/2, w.trapSize, w.trapSize);
             if (w.tmpBallRect.overlaps(tr)) {
-                if (w.player1StunImmunityTimer == 0) w.player1StunTimer = 120;
-                int speed = Math.max(5, (int)Math.sqrt(w.ballVelX*w.ballVelX + w.ballVelY*w.ballVelY));
-                w.ballVelX = -Math.abs(speed);
-                w.ballVelY = (int)((Math.random() - 0.5) * speed);
-                if (w.ballVelY == 0) w.ballVelY = (Math.random() > 0.5) ? 2 : -2;
+                int lv = w.getEffectiveAbilityLevel(2, "trap");
+                int stunDur = 20 + (lv - 1) * 7;
+                if (w.player1StunImmunityTimer == 0) w.player1StunTimer = stunDur;
                 w.player2TrapActive = false;
             }
         }
@@ -1885,7 +2047,7 @@ public class PongusGame extends ApplicationAdapter {
         if (w.tmpBallRect.overlaps(w.tmpPaddle1Rect) && w.ballVelX < 0) {
             if (w.player2HakiPhaseActive) {
                 w.player2HakiPhaseActive = false; // Ball phases through
-            } else if (w.player1GhostEffectTimer == 0) {
+            } else {
                 w.ballSpeed += 0.3;
                 w.ballNotHitTimer = 0;
                 double magnitude = Math.sqrt(w.ballVelX * w.ballVelX + w.ballVelY * w.ballVelY);
@@ -1894,7 +2056,7 @@ public class PongusGame extends ApplicationAdapter {
                     w.ballVelY = (int)((w.ballVelY / magnitude) * w.ballSpeed);
                 }
                 if (w.ballVelY == 0) w.ballVelY = (Math.random() > 0.5) ? 2 : -2;
-                w.ballX = 20;
+                w.ballX = p1W + 1; // push ball flush to paddle face
 
                 // Bankai burst (armed on activation, fires on next hit)
                 if (w.player1BankaiArmed) {
@@ -1925,7 +2087,7 @@ public class PongusGame extends ApplicationAdapter {
         if (w.tmpBallRect.overlaps(w.tmpPaddle2Rect) && w.ballVelX > 0) {
             if (w.player1HakiPhaseActive) {
                 w.player1HakiPhaseActive = false;
-            } else if (w.player2GhostEffectTimer == 0) {
+            } else {
                 w.ballSpeed += 0.3;
                 w.ballNotHitTimer = 0;
                 double magnitude = Math.sqrt(w.ballVelX * w.ballVelX + w.ballVelY * w.ballVelY);
@@ -1934,7 +2096,7 @@ public class PongusGame extends ApplicationAdapter {
                     w.ballVelY = (int)((w.ballVelY / magnitude) * w.ballSpeed);
                 }
                 if (w.ballVelY == 0) w.ballVelY = (Math.random() > 0.5) ? 2 : -2;
-                w.ballX = 565;
+                w.ballX = p2X - 16; // push ball flush to paddle face
 
                 // Bankai burst (armed on activation, fires on next hit)
                 if (w.player2BankaiArmed) {
@@ -2035,7 +2197,7 @@ public class PongusGame extends ApplicationAdapter {
             w.player1GhostTimer += w.dti;
             if (w.player1GhostTimer >= w.ghostCooldown) {
                 int ghostLevel = w.player1Abilities.get("ghost_ball");
-                int ghostDur = 200 + ghostLevel * 50; // 250 at lv1, 300 at lv2, 350 at lv3...
+                int ghostDur = 80 + ghostLevel * 20; // 100 at lv1, 120 at lv2, 140 at lv3...
                 w.player2GhostEffectTimer = ghostDur;
                 w.player2GhostHasPhased = false;
                 w.player1GhostTimer = 0;
@@ -2045,17 +2207,17 @@ public class PongusGame extends ApplicationAdapter {
             w.player2GhostTimer += w.dti;
             if (w.player2GhostTimer >= w.ghostCooldown) {
                 int ghostLevel = w.player2Abilities.get("ghost_ball");
-                int ghostDur = 200 + ghostLevel * 50;
+                int ghostDur = 80 + ghostLevel * 20;
                 w.player1GhostEffectTimer = ghostDur;
                 w.player1GhostHasPhased = false;
                 w.player2GhostTimer = 0;
             }
         }
-        if (w.player1GhostEffectTimer > 0) { w.player1GhostEffectTimer -= w.dti; if (w.player1GhostHasPhased && w.ballX > 30) w.player1GhostEffectTimer = 0; }
-        if (w.player2GhostEffectTimer > 0) { w.player2GhostEffectTimer -= w.dti; if (w.player2GhostHasPhased && w.ballX < 570) w.player2GhostEffectTimer = 0; }
+        if (w.player1GhostEffectTimer > 0) w.player1GhostEffectTimer -= w.dti;
+        if (w.player2GhostEffectTimer > 0) w.player2GhostEffectTimer -= w.dti;
 
-        // Gravity hammer: always-on once drawn. Gravity per level = level*0.04, cap 0.20 at level 5.
-        // Applied in ball movement via gravityActive flag — ensure it stays on.
+        // Gravity hammer: always-on once drawn. Gravity per level = level*0.25 (lv5=1.25/tick).
+        // Applied in ball movement section — gravityActive kept for renderer queries.
         if (w.getEffectiveAbilityLevel(1, "gravity_hammer") > 0 || w.getEffectiveAbilityLevel(2, "gravity_hammer") > 0) {
             w.gravityActive = true;
         }
@@ -2157,7 +2319,7 @@ public class PongusGame extends ApplicationAdapter {
             if (rand < 0.05) type = "giant";
             else if (rand < 0.10) type = "shrink";
             else if (rand < 0.20) {
-                String[] mapTypes = {"dangerzone", "gravity", "invisiblewalls", "shrinkpaddles", "centerwall"};
+                String[] mapTypes = {"dangerzone", "invisiblewalls", "shrinkpaddles", "centerwall"};
                 type = mapTypes[(int)(Math.random() * mapTypes.length)];
             } else if (rand < 0.40) type = "speed";
             else if (rand < 0.60) type = "slow";
@@ -2195,8 +2357,6 @@ public class PongusGame extends ApplicationAdapter {
         } else if ("shrink".equals(type)) {
             if (w.ballVelX < 0 && w.paddle2Y < 340) w.paddle2Y = Math.min(340, w.paddle2Y + 40);
             else if (w.paddle1Y < 340) w.paddle1Y = Math.min(340, w.paddle1Y + 40);
-        } else if ("multiball".equals(type)) {
-            w.multiballActive = true; w.multiballDuration = 0;
         } else if ("dangerzone".equals(type)) {
             w.dangerZoneActive = true; w.dangerZoneDuration = 0; w.dangerZoneTime = 0;
         } else if ("teleport".equals(type)) {
@@ -2212,18 +2372,12 @@ public class PongusGame extends ApplicationAdapter {
             w.fireballActive = true; w.fireballDuration = 0;
         } else if ("zigzag".equals(type)) {
             w.zigzagActive = true; w.zigzagDuration = 0; w.zigzagTimer = 0;
-        } else if ("split".equals(type)) {
-            w.splitActive = true; w.splitDuration = 0;
-        } else if ("mirror".equals(type)) {
-            w.mirrorActive = true; w.mirrorDuration = 0;
         } else if ("invisiblewalls".equals(type)) {
             w.invisibleWallsActive = true; w.invisibleWallsDuration = 0; w.invisibleWallY = 150 + (int)(Math.random() * 100);
         } else if ("shrinkpaddles".equals(type)) {
             w.shrinkPaddlesActive = true; w.shrinkPaddlesDuration = 0;
         } else if ("centerwall".equals(type)) {
             w.centerWallActive = true; w.centerWallDuration = 0; w.centerWallGapY = 100 + (int)(Math.random() * 200);
-        } else if ("jumpscare".equals(type)) {
-            w.jumpscareActive = true; w.jumpscareDuration = 0; w.jumpscareTimer = 0;
         }
     }
 
@@ -2311,31 +2465,29 @@ public class PongusGame extends ApplicationAdapter {
 
     /**
      * AI for Player 2. Predicts where the ball will land and moves to intercept.
-     * Difficulty scales accuracy and speed — not artificial randomness.
+     * D1=beginner (can rally, makes mistakes), D2=intermediate, D3=hard.
      */
     private void updateAI(int paddleMaxY) {
         if (w.player2StunTimer > 0) return;
 
-        // AI moves at the same speed as the player — speed_boost on either side applies naturally.
-        // Difficulty only affects prediction accuracy, not movement speed.
-        double predError  = 85; // ±px natural angle misjudgement
-        int    reactDelay = 52; // ticks before re-evaluating (slow reaction)
-        double missRate   = 0;  // no artificial random misses — looks fake
-        int    deadZone   = 6;
+        // D1: forgiving — can rally but misses frequently
+        // D2: moderate — makes mistakes on harder shots
+        // D3: challenging — accurate but not perfect
+        double predError  = 55; // ±px landing prediction error
+        int    reactDelay = 50; // ticks between re-evaluating (~500ms)
+        int    deadZone   = 10;
 
         if (w.aiDifficulty == 2) {
-            predError  = 40;
-            reactDelay = 24;
-            missRate   = 0;
-            deadZone   = 5;
+            predError  = 35;
+            reactDelay = 33;
+            deadZone   = 7;
         } else if (w.aiDifficulty == 3) {
-            predError  = 14;
-            reactDelay = 10;
-            missRate   = 0;
-            deadZone   = 4;
+            predError  = 18;
+            reactDelay = 18;
+            deadZone   = 5;
         }
 
-        // Use player 2's actual speed (includes their speed_boost, haki, bankai bonuses)
+        // AI speed (aiSpeedMultiplier set per trophy tier at match start)
         int aiSpeed = (int)(w.getPlayerSpeed(2) * w.aiSpeedMultiplier);
         int slowOppLevel = w.getEffectiveAbilityLevel(1, "slow_opponent");
         if (slowOppLevel > 0) {
@@ -2343,6 +2495,7 @@ public class PongusGame extends ApplicationAdapter {
             aiSpeed = Math.max(1, (int)(aiSpeed * slowFactor));
         }
 
+        // Re-predict when ball direction changes or timer expires
         boolean ballComing = w.ballVelX > 0;
         boolean dirChanged = ballComing != w.aiWasBallMovingToward;
         w.aiWasBallMovingToward = ballComing;
@@ -2351,33 +2504,57 @@ public class PongusGame extends ApplicationAdapter {
         if (dirChanged || w.aiPredictionTimer >= reactDelay) {
             w.aiPredictionTimer = 0;
             if (!ballComing) {
-                // Ball going the other way — drift back toward center
-                w.aiPredictedY = 192;
+                // Ball going away — drift toward center with natural variation
+                w.aiPredictedY = 192 + (int)((Math.random() - 0.5) * 50);
             } else {
                 int pred = simulateBallY();
-                // Angle misjudgment — natural human-like imprecision
                 pred += (int)((Math.random() - 0.5) * predError * 2);
                 pred  = Math.max(5, Math.min(395, pred));
                 w.aiPredictedY = pred;
             }
         }
 
-        int targetY = w.aiPredictedY;
+        // Reverse controls — detect transitions
+        boolean isReversed = w.player2ReverseEffectTimer > 0;
+        if (isReversed != w.aiWasReversed) {
+            w.aiReverseAdjustTimer = 25;
+            w.aiPredictionTimer = 999;
+        }
+        w.aiWasReversed = isReversed;
+        if (w.aiReverseAdjustTimer > 0) w.aiReverseAdjustTimer -= w.dti;
 
-        // Reverse controls: flip the direction the AI thinks it needs to go
-        if (w.player2ReverseEffectTimer > 0) {
-            int c = w.paddle2Y + w.getPaddleHeight(2, w.shrinkPaddlesActive) / 2;
-            targetY = c + (c - targetY);
+        // Micro-jitter: refresh small random sway every 12-27 ticks (human idle movement)
+        w.aiJitterTimer -= w.dti;
+        if (w.aiJitterTimer <= 0) {
+            w.aiJitterOffset = (int)((Math.random() - 0.5) * 14);
+            w.aiJitterTimer  = 12 + (int)(Math.random() * 15);
         }
 
-        int paddleCenter = w.paddle2Y + w.getPaddleHeight(2, w.shrinkPaddlesActive) / 2;
-        if (targetY < paddleCenter - deadZone) {
+        int targetY = w.aiPredictedY;
+
+        if (w.aiReverseAdjustTimer > 0) {
+            // Initial confusion period: AI drifts randomly near current position
+            int paddleCenter = w.paddle2Y + w.getPaddleHeight(2, w.shrinkPaddlesActive) / 2;
+            targetY = paddleCenter + (int)((Math.random() - 0.5) * 40);
+        } else if (isReversed) {
+            // Confused by reversed controls: mostly goes to the wrong (reflected) spot
+            // with heavy noise, like a player frantically trying to compensate and failing.
+            int wrongTarget = 400 - w.aiPredictedY;
+            targetY = wrongTarget + (int)((Math.random() - 0.5) * predError * 3);
+            targetY = Math.max(5, Math.min(395, targetY));
+        } else {
+            // Normal: add micro-jitter so the AI looks alive rather than robotically still
+            targetY += w.aiJitterOffset;
+        }
+
+        int paddleCenter2 = w.paddle2Y + w.getPaddleHeight(2, w.shrinkPaddlesActive) / 2;
+        if (targetY < paddleCenter2 - deadZone) {
             w.paddle2Y = Math.max(0, w.paddle2Y - (int)(aiSpeed * w.dt));
-        } else if (targetY > paddleCenter + deadZone) {
+        } else if (targetY > paddleCenter2 + deadZone) {
             w.paddle2Y = Math.min(paddleMaxY, w.paddle2Y + (int)(aiSpeed * w.dt));
         }
 
-        // AI ability usage — simulate pressing the ability key periodically
+        // AI ability usage
         double abilityChance = w.aiDifficulty == 3 ? 0.025 : w.aiDifficulty == 2 ? 0.010 : 0.004;
         if (Math.random() < abilityChance * w.dti) {
             handleAbilityKeyPress(w.player2AbilityKey);
@@ -2468,6 +2645,12 @@ public class PongusGame extends ApplicationAdapter {
      * Ports keyPressed ability activation logic from original PingPongGame (lines 9504-10230).
      */
     private void handleAbilityKeyPress(int keycode) {
+        // Sync ability activation to peer in online matches
+        if (w.isOnlineMatch) {
+            int playerN = (keycode == w.player1AbilityKey) ? 1 : 2;
+            w.network.send("A:" + playerN);
+        }
+
         // === MAGNET BALL branch 2: Force Field toggle ===
         // Magnet is passive — no key press needed
 
@@ -3061,6 +3244,8 @@ public class PongusGame extends ApplicationAdapter {
 
         // Reset AI prediction state
         w.aiPredictedY = 192; w.aiPredictionTimer = 999; w.aiWasBallMovingToward = false;
+        w.aiWasReversed = false; w.aiReverseAdjustTimer = 0;
+        w.aiJitterOffset = 0; w.aiJitterTimer = 0;
 
         // Reset stun/effect timers
         w.player1StunTimer = 0; w.player2StunTimer = 0;
@@ -3093,11 +3278,14 @@ public class PongusGame extends ApplicationAdapter {
         w.zigzagDuration = 0; w.splitDuration = 0;
         w.centerWallDuration = 0; w.invisibleWallsDuration = 0;
         w.shrinkPaddlesDuration = 0; w.dangerZoneDuration = 0;
-        w.jumpscareActive = false; w.jumpscareDuration = 0;
-        w.multiballActive = false; w.multiballDuration = 0;
 
         // Reset cheat mode
         w.cheatModeEnabled = false;
+
+        // Reset drag pointers
+        w.p1DragPointer = -1;
+        w.p2DragPointer = -1;
+        w.networkOpponentPaddleY = 200f;
 
         // Reset match timer and overtime state
         w.matchTimer = 0;
@@ -3119,6 +3307,13 @@ public class PongusGame extends ApplicationAdapter {
         w.player2DrawIndex = 0;
         w.toastP1Text = ""; w.toastP1Timer = 0f;
         w.toastP2Text = ""; w.toastP2Timer = 0f;
+
+        // One-shot debug: give the next AI ghost_ball then never again
+        if (w.singlePlayer && w.debugNextAiGhostBall) {
+            w.debugNextAiGhostBall = false;
+            w.player2Abilities.put("ghost_ball", 3);
+            w.player2DrawnCards.add("ghost_ball");
+        }
 
         Gdx.app.log("Game", "Game state reset");
     }
@@ -3483,6 +3678,15 @@ public class PongusGame extends ApplicationAdapter {
     @Override
     public void pause() {
         // Called when the browser tab is hidden or the page is about to unload (HTML5).
+        // If the player closes the tab mid online match, record a loss for them.
+        if (w.isOnlineMatch && !w.showingMainMenu && w.matchResultPhase == 0 && w.profile != null) {
+            w.profile.trophies = TrophySystem.calculateTrophiesAfterLoss(w.profile.trophies);
+            w.profile.arenaIndex = TrophySystem.getArenaIndex(w.profile.trophies);
+            w.profile.totalMatches++;
+            String histEntry = "L|" + w.player2Name + "|" + TrophySystem.TROPHIES_PER_LOSS;
+            w.profile.matchHistory.add(0, histEntry);
+            if (w.profile.matchHistory.size() > 5) w.profile.matchHistory.remove(5);
+        }
         if (w.profile != null) {
             try { w.profile.save(Gdx.app.getPreferences(PROFILE_PREF)); }
             catch (Exception e) { Gdx.app.log("Pongus", "pause save failed: " + e.getMessage()); }
@@ -3504,7 +3708,6 @@ public class PongusGame extends ApplicationAdapter {
         if (w.texPaddle2 != null) w.texPaddle2.dispose();
         if (w.texBall != null) w.texBall.dispose();
         if (w.texBallFire != null) w.texBallFire.dispose();
-        if (w.texBallGhost != null) w.texBallGhost.dispose();
         for (com.badlogic.gdx.graphics.Texture t : w.texChests) { if (t != null) t.dispose(); }
         for (com.badlogic.gdx.graphics.Texture t : w.texArenas) { if (t != null) t.dispose(); }
         for (com.badlogic.gdx.graphics.Texture t : w.arenaBgTextures) { if (t != null) t.dispose(); }

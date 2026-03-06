@@ -48,6 +48,12 @@ public class GameWorld {
     public boolean isHost = false;
     public String activeSynergyKey = "";
 
+    // Online matchmaking state
+    public com.pongus.game.network.NetworkAdapter network; // injected at startup
+    public boolean showingMatchmaking = false;             // "Finding opponent..." screen
+    public float   matchmakingTimer   = 0f;               // counts up; AI fallback after threshold
+    public float   networkOpponentPaddleY = 200f;         // received from peer each frame
+
     // Reusable temp objects (avoid GC in render loop)
     public final Vector2 tmpVec = new Vector2();
     public final Vector3 tmpVec3 = new Vector3();
@@ -69,7 +75,7 @@ public class GameWorld {
 
     // Paddles
     public int paddle1Y = 100, paddle2Y = 100;
-    public int paddleHeight = 60; // base paddle height
+    public int paddleHeight = 80; // base paddle height
     public double pad1R = 0, pad2R = 0; // sub-pixel remainder for paddles
 
     // Scores
@@ -254,6 +260,9 @@ public class GameWorld {
     // Cheat mode
     public boolean cheatModeEnabled = false;
 
+    // One-shot debug: give the next AI opponent ghost_ball at match start, then never again
+    public boolean debugNextAiGhostBall = false;
+
     // Abilities (LinkedHashMap preserves insertion order for display)
     public LinkedHashMap<String, Integer> player1Abilities = new LinkedHashMap<String, Integer>();
     public LinkedHashMap<String, Integer> player2Abilities = new LinkedHashMap<String, Integer>();
@@ -267,9 +276,10 @@ public class GameWorld {
     public ArrayList<String> player2DrawnCards = new ArrayList<String>();
 
     // Card draw thresholds: draw at cumulative score 2, 5, 9, 14, 20... (each costs 1 more than last)
-    public static final int[] DRAW_THRESHOLDS = {2, 5, 9, 14, 20, 27, 35};
+    public static final int[] DRAW_THRESHOLDS = {1, 2, 4, 6, 9, 12};
     public int player1DrawIndex = 0;  // which threshold is next for player 1
     public int player2DrawIndex = 0;
+
 
     // Per-player toast notifications
     public String toastP1Text = "";
@@ -295,9 +305,11 @@ public class GameWorld {
     public int practiceSelectedDifficulty = 1; // 0=Easy, 1=Normal, 2=Hard, 3=Impossible
     public boolean practiceMode = false;
 
-    // Touch control targets (Phase 11)
-    public float touchTargetY1 = -1f;  // -1 = no touch active for P1
-    public float touchTargetY2 = -1f;  // -1 = no touch active for P2
+    // Mobile drag control — relative (delta-based), per pointer
+    public int   p1DragPointer = -1;   // pointer ID dragging P1 (-1 = none)
+    public int   p2DragPointer = -1;   // pointer ID dragging P2 (-1 = none)
+    public float p1LastDragY   = 0f;   // last virtual Y recorded for P1 pointer
+    public float p2LastDragY   = 0f;   // last virtual Y recorded for P2 pointer
 
     // Ability cooldown timers
     public int player1GunTimer = 0, player2GunTimer = 0, gunCooldown = 400;
@@ -309,7 +321,7 @@ public class GameWorld {
     public int player1FreezeTimer = 0, player2FreezeTimer = 0, freezeCooldown = 250;
     public int player1BlindTimer = 0, player2BlindTimer = 0, blindCooldown = 200;
     public int player1ShrinkTimer = 0, player2ShrinkTimer = 0, shrinkCooldown = 1000;
-    public int player1GhostTimer = 0, player2GhostTimer = 0, ghostCooldown = 800; // period between invisible phases
+    public int player1GhostTimer = 0, player2GhostTimer = 0, ghostCooldown = 2000; // period between invisible phases
     public int player1RealityTimer = 0, player2RealityTimer = 0, realityCooldown = 300;
     public int player1DashTimer = 0, player2DashTimer = 0;
     public int player1FlashTimer = 0, player2FlashTimer = 0, flashCooldown = 250;
@@ -493,6 +505,10 @@ public class GameWorld {
     public int aiPredictedY = 200;       // where AI thinks ball will land
     public int aiPredictionTimer = 999;  // ticks since last prediction update (start high to trigger first update)
     public boolean aiWasBallMovingToward = false; // used to detect direction change
+    public boolean aiWasReversed = false;  // tracks previous reversed state to detect transitions
+    public int aiReverseAdjustTimer = 0;   // counts down during adjustment period (25 ticks = 0.25s)
+    public int aiJitterOffset = 0;         // current micro-jitter offset (human idle sway)
+    public int aiJitterTimer  = 0;         // ticks until next jitter refresh
 
     // === SPRITE TEXTURES (Phase 9) — null if PNG not loaded ===
     public com.badlogic.gdx.graphics.Texture texPaddle1 = null;
