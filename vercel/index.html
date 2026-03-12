@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>Pongus</title>
+    <style>
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+        }
+        canvas {
+            display: block;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        /* Rotate prompt — shown only in portrait */
+        #rotate-prompt {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: #000e2a;
+            z-index: 9999;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            color: #fff;
+            font-family: monospace;
+        }
+        #rotate-prompt .icon {
+            font-size: 64px;
+            animation: spin 1.8s ease-in-out infinite;
+        }
+        #rotate-prompt p {
+            font-size: 18px;
+            color: #aad4ff;
+            margin: 0;
+            text-align: center;
+        }
+        @keyframes spin {
+            0%   { transform: rotate(0deg); }
+            40%  { transform: rotate(90deg); }
+            60%  { transform: rotate(90deg); }
+            100% { transform: rotate(90deg); }
+        }
+        @media (orientation: portrait) {
+            #rotate-prompt { display: flex; }
+        }
+
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ffd700;
+            font-family: monospace;
+            font-size: 24px;
+        }
+    </style>
+    <script>
+        // Prevent browser shortcuts from stealing game keys
+        window.addEventListener("keydown", function(e) {
+            if (["/", " ", "Tab", "Escape",
+                 "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+                 "F5", "F8", "F9"].includes(e.key)) {
+                e.preventDefault();
+            }
+        });
+    </script>
+</head>
+<body>
+    <!-- Rotate prompt (portrait only, CSS-driven) -->
+    <div id="rotate-prompt">
+        <div class="icon">&#x1F4F1;</div>
+        <p>Rotate your device to play</p>
+    </div>
+
+    <!-- Netlib P2P networking bridge -->
+    <script type="module" src="netlib-bridge.js"></script>
+
+    <div id="loading" class="loading">Loading Pongus...</div>
+    <script type="text/javascript" src="html/html.nocache.js"></script>
+    <script>
+        var checkCanvas = setInterval(function() {
+            if (document.querySelector("canvas")) {
+                document.getElementById("loading").style.display = "none";
+                clearInterval(checkCanvas);
+            }
+        }, 100);
+    </script>
+</body>
+</html>
